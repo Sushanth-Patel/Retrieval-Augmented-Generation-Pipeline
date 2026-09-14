@@ -9,6 +9,8 @@ on:
 jobs:
   evaluate:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: "."
 
     steps:
     - name: Check out repository
@@ -27,7 +29,7 @@ jobs:
 
     - name: Run Unit Tests
       run: |
-        pytest tests/ -v
+        python -m pytest tests/ -v
 
     - name: Run RAG Evaluation Benchmark Suite
       run: |

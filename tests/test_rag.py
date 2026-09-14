@@ -1,7 +1,14 @@
 """Unit and Integration Tests for Agentic RAG Pipeline."""
 
-import pytest
+import sys
 from pathlib import Path
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import pytest
 from core.chunker import NaiveChunker, DocumentChunk
 from core.vector_store import VectorStore
 from core.guardrails import InputGuardrail, OutputGuardrail, ConfirmationGate
