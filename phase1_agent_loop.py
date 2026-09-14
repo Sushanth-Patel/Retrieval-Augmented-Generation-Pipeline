@@ -66,6 +66,16 @@ class ManualAgent:
     def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False):
         self.vector_store = VectorStore(persist_dir=db_dir, collection_name="phoenix_knowledge_base")
         self.llm = LLMClient(force_mock=force_mock)
+        if self.vector_store.count() == 0:
+            self._ingest_defaults()
+
+    def _ingest_defaults(self, docs_dir: str = "data/sample_docs"):
+        docs_path = Path(docs_dir)
+        if docs_path.exists():
+            from core.chunker import NaiveChunker
+            chunker = NaiveChunker(chunk_size=500, overlap=50)
+            chunks = chunker.chunk_directory(docs_path, glob_pattern="*.md")
+            self.vector_store.add_chunks(chunks)
 
     def decompose(self, query: str, logger: AgentLogger) -> List[str]:
         """Decomposes a user query into discrete, focused sub-questions."""

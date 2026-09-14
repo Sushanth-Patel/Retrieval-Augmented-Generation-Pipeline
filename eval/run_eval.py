@@ -49,6 +49,13 @@ class EvaluationHarness:
             self.agent = LangGraphAgent(force_mock=force_mock)
         else:
             self.agent = ManualAgent(force_mock=force_mock)
+        
+        if self.agent.vector_store.count() == 0:
+            from core.chunker import NaiveChunker
+            chunker = NaiveChunker(chunk_size=500, overlap=50)
+            chunks = chunker.chunk_directory(Path("data/sample_docs"), glob_pattern="*.md")
+            self.agent.vector_store.add_chunks(chunks)
+
         self.test_cases: List[Dict[str, Any]] = []
         self._load_tests()
 
