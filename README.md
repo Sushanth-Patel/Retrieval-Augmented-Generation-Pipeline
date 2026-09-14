@@ -1,5 +1,7 @@
 # Agentic RAG Pipeline: Phased Portfolio Implementation
 
+[![RAG Evaluation & CI Benchmark](https://github.com/Sushanth-Patel/agentic-rag-pipeline/actions/workflows/eval.yml/badge.svg)](https://github.com/Sushanth-Patel/agentic-rag-pipeline/actions/workflows/eval.yml)
+
 An inspectable, phased Retrieval-Augmented Generation (RAG) system built from scratch in Python—transitioning from baseline retrieval to manual agentic orchestration, security guardrails, an empirical 35-case evaluation benchmark, and a LangGraph state machine with persistent memory.
 
 ---
