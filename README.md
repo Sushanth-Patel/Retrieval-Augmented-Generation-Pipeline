@@ -334,15 +334,26 @@ pip install -r requirements.txt
 ```
 
 ### Environment Configuration (Optional)
-The pipeline runs 100% offline out-of-the-box using deterministic local mock reasoning (`--mock`). To use live models, copy `.env.example` to `.env` and set your key:
+The pipeline runs 100% offline out-of-the-box using deterministic local mock reasoning (`--mock`). To use live models, copy `.env.example` to `.env` and configure your API key:
 ```bash
-# Supported providers (auto-detected):
+# Supported provider interfaces (auto-detected in core/llm_client.py):
 GEMINI_API_KEY=your_gemini_api_key
+# or
+GROQ_API_KEY=your_groq_api_key
 # or
 OPENAI_API_KEY=your_openai_api_key
 # or
+OPENROUTER_API_KEY=your_openrouter_api_key
+# or
 DASHSCOPE_API_KEY=your_dashscope_key
 ```
+
+> [!WARNING]
+> **Implemented Interface Abstraction vs. Live Verified Inference:**  
+> Multi-provider switching in `core/llm_client.py` is an **implemented architectural abstraction**, not an empirically verified live capability:  
+> - **Live Execution Record:** Live external endpoints were attempted during development: DashScope returned `HTTP 401: Invalid API Key`, and OpenAI returned `HTTP 429: credit_balance_exhausted` (`insufficient_quota`). No live provider has completed an end-to-end evaluation run in this project.  
+> - **Empirical Verification Grounding:** Every single metric reported in this repository—including the 32/35 (91.4%) pass rate, the 14/14 unit tests, and the GitHub Actions CI gating—was generated and verified 100% deterministically against the local offline engine (`LocalMockLLM`). Live multi-provider routing is implemented in code but remains unverified against production endpoints.
+
 
 ### Running Each Phase
 
