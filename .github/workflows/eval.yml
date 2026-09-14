@@ -1,0 +1,48 @@
+name: RAG Evaluation & CI Benchmark
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: "pip"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run Unit Tests
+      run: |
+        pytest tests/ -v
+
+    - name: Run RAG Evaluation Benchmark Suite
+      run: |
+        python eval/run_eval.py --mock
+
+    - name: Verify Evaluation Pass Rate Threshold (> 75%)
+      run: |
+        python -c "
+        import json
+        with open('eval/eval_results.json') as f:
+            res = json.load(f)
+        pass_rate = res['overall_pass_rate_pct']
+        print(f'Overall Pass Rate: {pass_rate}%')
+        if pass_rate < 75.0:
+            print('CI FAILED: Pass rate below minimum 75% threshold')
+            exit(1)
+        print('CI PASSED: Benchmark meets quality standards')
+        "

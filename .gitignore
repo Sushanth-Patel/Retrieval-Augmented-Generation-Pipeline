@@ -1,0 +1,21 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Chroma DB Local Persistence
+.chroma_db/
+
+# Local Environment Variables & Secrets
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
