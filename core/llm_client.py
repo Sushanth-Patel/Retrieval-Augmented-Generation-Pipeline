@@ -3,6 +3,7 @@
 import os
 import re
 import json
+import time
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
@@ -244,22 +245,16 @@ class LLMClient:
             self.provider = "mock"
             return
 
+        preferred = os.getenv("LLM_PROVIDER", "").strip().lower()
+
         gemini_key = os.getenv("GEMINI_API_KEY")
         openai_key = os.getenv("OPENAI_API_KEY")
         groq_key = os.getenv("GROQ_API_KEY")
         openrouter_key = os.getenv("OPENROUTER_API_KEY")
         dashscope_key = os.getenv("DASHSCOPE_API_KEY")
 
-        if gemini_key:
-            try:
-                from google import genai
-                self.gemini_client = genai.Client(api_key=gemini_key)
-                self.provider = "gemini"
-                return
-            except Exception as e:
-                print(f"[LLMClient] Failed to initialize Gemini ({e}), checking alternatives...")
-
-        if groq_key:
+        # 1. Check if an explicit provider is selected or prioritized
+        if preferred == "groq" or (not preferred and groq_key):
             try:
                 from openai import OpenAI
                 self.openai_client = OpenAI(
@@ -267,12 +262,32 @@ class LLMClient:
                     base_url="https://api.groq.com/openai/v1"
                 )
                 self.provider = "groq"
-                self.default_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+                self.default_model = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
                 return
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize Groq ({e}), checking alternatives...")
 
-        if openrouter_key:
+        if preferred == "gemini" or (not preferred and gemini_key):
+            try:
+                from google import genai
+                self.gemini_client = genai.Client(api_key=gemini_key)
+                self.provider = "gemini"
+                self.default_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+                return
+            except Exception as e:
+                print(f"[LLMClient] Failed to initialize Gemini ({e}), checking alternatives...")
+
+        if preferred == "openai" or (not preferred and openai_key):
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=openai_key)
+                self.provider = "openai"
+                self.default_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                return
+            except Exception as e:
+                print(f"[LLMClient] Failed to initialize OpenAI ({e}), checking alternatives...")
+
+        if preferred == "openrouter" or (not preferred and openrouter_key):
             try:
                 from openai import OpenAI
                 self.openai_client = OpenAI(
@@ -285,17 +300,7 @@ class LLMClient:
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize OpenRouter ({e}), checking alternatives...")
 
-        if openai_key:
-            try:
-                from openai import OpenAI
-                self.openai_client = OpenAI(api_key=openai_key)
-                self.provider = "openai"
-                self.default_model = "gpt-4o-mini"
-                return
-            except Exception as e:
-                print(f"[LLMClient] Failed to initialize OpenAI ({e}), checking alternatives...")
-
-        if dashscope_key:
+        if preferred == "dashscope" or (not preferred and dashscope_key):
             try:
                 from openai import OpenAI
                 self.openai_client = OpenAI(
@@ -303,45 +308,56 @@ class LLMClient:
                     base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
                 )
                 self.provider = "dashscope"
-                self.default_model = "qwen-plus"
+                self.default_model = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
                 return
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize DashScope ({e}), falling back to mock...")
 
         self.provider = "mock"
 
-    def complete(self, prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.0) -> str:
-        """Executes a completion call against the active provider."""
+    def complete(self, prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.0, max_tokens: int = 1024) -> str:
+        """Executes a completion call against the active provider with exponential backoff on 429."""
         if self.provider == "mock":
             return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
 
-        try:
-            if self.provider == "gemini":
-                contents = prompt
-                if system_prompt:
-                    contents = f"System: {system_prompt}\n\nUser: {prompt}"
-                response = self.gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=contents,
-                )
-                return response.text or ""
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            try:
+                if self.provider == "gemini":
+                    contents = prompt
+                    if system_prompt:
+                        contents = f"System: {system_prompt}\n\nUser: {prompt}"
+                    response = self.gemini_client.models.generate_content(
+                        model=getattr(self, "default_model", "gemini-2.5-flash"),
+                        contents=contents,
+                    )
+                    return response.text or ""
 
-            elif self.provider in ("openai", "dashscope", "groq", "openrouter"):
-                messages = []
-                if system_prompt:
-                    messages.append({"role": "system", "content": system_prompt})
-                messages.append({"role": "user", "content": prompt})
+                elif self.provider in ("openai", "dashscope", "groq", "openrouter"):
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    messages.append({"role": "user", "content": prompt})
 
-                model = getattr(self, "default_model", "gpt-4o-mini")
-                response = self.openai_client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature
-                )
-                return response.choices[0].message.content or ""
+                    model = getattr(self, "default_model", "gpt-4o-mini")
+                    response = self.openai_client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                    text = response.choices[0].message.content or ""
+                    return text
 
-        except Exception as e:
-            print(f"[LLMClient Warning] {self.provider} API failed ({e}), falling back to deterministic local engine.")
-            return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
+            except Exception as e:
+                err_msg = str(e)
+                if ("429" in err_msg or "rate limit" in err_msg.lower()) and attempt < max_attempts - 1:
+                    backoff = (2 ** attempt) * 2
+                    print(f"[LLMClient RateLimit] Provider {self.provider} hit 429: backing off for {backoff}s (attempt {attempt+1}/{max_attempts-1})...")
+                    time.sleep(backoff)
+                    continue
+
+                print(f"[LLMClient Warning] {self.provider} API failed ({e}), falling back to deterministic local engine.")
+                return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
 
         return LocalMockLLM().complete(prompt, system_prompt=system_prompt)

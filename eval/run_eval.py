@@ -45,6 +45,7 @@ class EvaluationHarness:
         self.output_guardrail = OutputGuardrail()
         self.confirmation_gate = ConfirmationGate()
         self.agent_type = agent_type
+        self.force_mock = force_mock
         if agent_type == "langgraph":
             self.agent = LangGraphAgent(force_mock=force_mock)
         else:
@@ -170,6 +171,7 @@ class EvaluationHarness:
             result["details"] = "Clean execution."
 
         result["latency_ms"] = round((time.time() - start_time) * 1000, 2)
+        result["answer"] = sanitized_answer
         return result
 
     def run_all(self) -> Dict[str, Any]:
@@ -194,12 +196,19 @@ class EvaluationHarness:
             status_symbol = "[green][PASS][/green]" if r["passed"] else "[red][FAIL][/red]"
             console.print(f"{status_symbol} [{r['id']}] [{cat:<20}] {tc['description']}")
 
+            if not self.force_mock and getattr(self.agent.llm, "provider", "mock") != "mock":
+                time.sleep(5)
+
         # Compute summary metrics
         total = len(results)
         passed = sum(1 for r in results if r["passed"])
         pass_rate = round((passed / total) * 100, 1) if total > 0 else 0.0
 
+        is_live = not self.force_mock and getattr(self.agent.llm, "provider", "mock") != "mock"
         summary = {
+            "execution_mode": "live" if is_live else "mock",
+            "provider": getattr(self.agent.llm, "provider", "mock"),
+            "model": getattr(self.agent.llm, "default_model", "mock"),
             "total_cases": total,
             "total_passed": passed,
             "overall_pass_rate_pct": pass_rate,
@@ -215,7 +224,7 @@ class EvaluationHarness:
         }
 
         # Save to disk
-        out_path = Path("eval/eval_results.json")
+        out_path = Path("eval/eval_results_live.json") if is_live else Path("eval/eval_results.json")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
