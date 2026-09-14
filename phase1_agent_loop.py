@@ -182,8 +182,11 @@ class ManualAgent:
         # Step 1: Decompose
         plan = self.decompose(query, logger)
 
-        # Step 2: Retrieve evidence for each step
+        # Step 2: Retrieve evidence (Original query preserved as primary anchor + decomposed sub-queries)
         all_evidence: List[Dict[str, Any]] = []
+        orig_results = self.call_tool("knowledge_base_search", query, top_k=4, logger=logger)
+        all_evidence.extend(orig_results)
+
         for step in plan:
             results = self.call_tool("knowledge_base_search", step, top_k=3, logger=logger)
             all_evidence.extend(results)

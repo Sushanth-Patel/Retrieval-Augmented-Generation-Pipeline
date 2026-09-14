@@ -1,18 +1,20 @@
-"""ChromaDB Vector Store wrapper for indexing and retrieval."""
+"""ChromaDB Vector Store wrapper with Hybrid Dense + BM25 Reciprocal Rank Fusion (RRF)."""
 
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import chromadb
 from chromadb.config import Settings
 from core.chunker import DocumentChunk
+from core.bm25 import BM25Index, reciprocal_rank_fusion
 
 
 class VectorStore:
-    """Manages document embeddings and top-k semantic retrieval using ChromaDB."""
+    """Manages document embeddings and semantic/hybrid retrieval using ChromaDB & BM25."""
 
     def __init__(self, persist_dir: Optional[str] = "./.chroma_db", collection_name: str = "phoenix_knowledge_base"):
         self.persist_dir = persist_dir
         self.collection_name = collection_name
+        self.bm25: Optional[BM25Index] = None
 
         if persist_dir:
             Path(persist_dir).mkdir(parents=True, exist_ok=True)
@@ -25,6 +27,31 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"}
         )
 
+        if self.count() > 0:
+            self._init_bm25_from_collection()
+
+    def _init_bm25_from_collection(self):
+        """Builds in-memory BM25 index from persistent ChromaDB collection."""
+        data = self.collection.get()
+        if not data or not data["ids"]:
+            self.bm25 = None
+            return
+
+        chunks: List[DocumentChunk] = []
+        for cid, doc, meta in zip(data["ids"], data["documents"], data["metadatas"]):
+            chunks.append(
+                DocumentChunk(
+                    chunk_id=cid,
+                    doc_name=meta.get("source", "doc"),
+                    chunk_index=meta.get("chunk_index", 0),
+                    content=doc,
+                    start_char=meta.get("start_char", 0),
+                    end_char=meta.get("end_char", len(doc)),
+                    metadata=meta
+                )
+            )
+        self.bm25 = BM25Index(chunks)
+
     def count(self) -> int:
         """Returns the number of documents in the collection."""
         return self.collection.count()
@@ -36,9 +63,10 @@ class VectorStore:
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"}
         )
+        self.bm25 = None
 
     def add_chunks(self, chunks: List[DocumentChunk], batch_size: int = 100):
-        """Indexes DocumentChunk objects into the ChromaDB collection."""
+        """Indexes DocumentChunk objects into ChromaDB and builds the BM25 index."""
         if not chunks:
             return
 
@@ -61,8 +89,11 @@ class VectorStore:
                 metadatas=metadatas
             )
 
-    def query(self, query_text: str, top_k: int = 4) -> List[Dict[str, Any]]:
-        """Queries the vector store and returns top_k results with metadata and similarity scores."""
+        # Build in-memory BM25 sparse index
+        self.bm25 = BM25Index(chunks)
+
+    def dense_query(self, query_text: str, top_k: int = 4) -> List[Dict[str, Any]]:
+        """Executes pure dense semantic cosine retrieval against ChromaDB."""
         if self.count() == 0:
             return []
 
@@ -81,8 +112,6 @@ class VectorStore:
         distances = results["distances"][0] if results.get("distances") else [0.0] * len(ids)
 
         for chunk_id, doc, meta, dist in zip(ids, docs, metas, distances):
-            # Chroma returns cosine distance (0 = identical, 1 = orthogonal, 2 = opposite).
-            # Convert to similarity: 1 - dist
             similarity = round(1.0 - dist, 4) if dist is not None else 1.0
             formatted_results.append({
                 "chunk_id": chunk_id,
@@ -93,3 +122,46 @@ class VectorStore:
             })
 
         return formatted_results
+
+    def sparse_query(self, query_text: str, top_k: int = 4) -> List[Dict[str, Any]]:
+        """Executes pure sparse lexical BM25 retrieval."""
+        if not self.bm25 or self.count() == 0:
+            return []
+
+        raw_results = self.bm25.search(query_text, top_k=top_k)
+        formatted: List[Dict[str, Any]] = []
+        for chunk, score in raw_results:
+            formatted.append({
+                "chunk_id": chunk.chunk_id,
+                "content": chunk.content,
+                "metadata": {
+                    "source": chunk.metadata.get("source", chunk.doc_name),
+                    "chunk_index": chunk.chunk_index
+                },
+                "bm25_score": round(score, 4),
+                "similarity": 0.0
+            })
+        return formatted
+
+    def query(self, query_text: str, top_k: int = 4, mode: str = "hybrid") -> List[Dict[str, Any]]:
+        """Queries knowledge base using dense, sparse, or hybrid (RRF) retrieval."""
+        if self.count() == 0:
+            return []
+
+        if mode == "dense" or self.bm25 is None:
+            return self.dense_query(query_text, top_k=top_k)
+
+        if mode == "sparse":
+            return self.sparse_query(query_text, top_k=top_k)
+
+        # Hybrid RRF: Cormack constant k=60
+        candidate_k = max(top_k * 2, 8)
+        dense_hits = self.dense_query(query_text, top_k=candidate_k)
+        sparse_hits = self.bm25.search(query_text, top_k=candidate_k)
+
+        return reciprocal_rank_fusion(
+            dense_results=dense_hits,
+            sparse_results=sparse_hits,
+            rrf_k=60,
+            top_k=top_k
+        )

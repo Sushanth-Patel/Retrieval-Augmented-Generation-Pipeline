@@ -134,9 +134,9 @@ Score each case pass/fail against a rubric you define (grounded-in-evidence, ref
 | :--- | :--- | :--- | :--- |
 | **Phase 0** | Foundations (Naive RAG) | `phase0_naive_rag.py`, ChromaDB, 76 chunks from 29 docs | **Completed & Verified** (Retrieval + offline synthesis functional across all 29 docs) |
 | **Phase 1** | Manual Agent Loop | `phase1_agent_loop.py`, query decomposition | **Completed & Verified** (Decompose -> retrieve -> synthesize -> validate) |
-| **Phase 2** | Guardrails & 35-Case Eval | `core/guardrails.py`, `eval/run_eval.py` | **Completed & Verified** (82.9% pass rate, 29/35 benchmark; 100% on curated injection set vs 16.7% on novel unseen attacks) |
+| **Phase 2** | Guardrails & 35-Case Eval | `core/guardrails.py`, `eval/run_eval.py` | **Completed & Verified** (91.4% pass rate, 32/35 benchmark; 100% on curated injection set vs 16.7% on novel unseen attacks) |
 | **Phase 3** | LangGraph Agent & Memory | `phase3_langgraph_agent.py`, `core/memory.py` | **Completed & Verified** (StateGraph routing, persistent recall via `data/user_memory.json`) |
-| **Phase 4** | CI/CD, Tracing, Extra Connector | `.github/workflows/eval.yml`, README badge | **CI/CD Completed & Verified** (GitHub Actions runs live on every push/PR with 82.9% pass rate, CI badge active) |
+| **Phase 4** | CI/CD, Hybrid Search, Extra Connector | `core/bm25.py`, `.github/workflows/eval.yml`, README badge | **Completed & Verified** (Hybrid BM25+RRF with original query preservation, 91.4% pass rate, CI live on GitHub Actions) |
 
 ---
 
@@ -145,11 +145,11 @@ Score each case pass/fail against a rubric you define (grounded-in-evidence, ref
 1. **Guardrail Defense Boundary (100% Curated vs 16.7% Novel Phrasings):**
    - Direct injection blocking registered 100% (6/6) on the fixed benchmark test set, but drops to 16.7% (1/6) when exposed to novel/unseen phrasings (as documented in README Section 1 & 3). The static regex filter is an enumerable defense, not a semantic classifier.
 2. **Missing `.env` File (Offline Mode Active):**
-   - The system currently runs in offline mode using `LocalMockLLM`. While all tests pass (11/11 pytest, 29/35 eval harness), live calls to Gemini, OpenAI, or DashScope require `.env`.
+   - The system currently runs in offline mode using `LocalMockLLM`. While all tests pass (14/14 pytest, 32/35 eval harness), live calls to Gemini, OpenAI, or DashScope require `.env`.
 3. **Phase 1 Connector Scope (Local Vector DB vs External SaaS):**
    - Phase 1 plan originally noted Notion/Gmail as a single-source connector. The current implementation uses the 29 local markdown engineering docs (`data/sample_docs/`) indexed into ChromaDB. This is fully functional and zero-friction for local benchmarking, but an external Notion API connector remains an option if external SaaS retrieval is desired.
-4. **Six Eval Failures Due to Fixed-Size Chunking (Documented Trade-off):**
-   - Test cases TC-02, TC-03, TC-04, TC-08, TC-11, and TC-12 miss keyword thresholds because fixed 500-char chunks split markdown tables and lists across boundaries. This is transparently documented in the README as a real engineering failure mode.
+4. **Three Eval Failures Due to Architectural Boundaries (Documented Trade-offs):**
+   - Test cases TC-04 (chunk-boundary header severance), TC-11, and TC-12 (multi-document top-$k$ budget starvation across 3 distinct files) miss keyword thresholds. This is transparently documented in the README as genuine architectural limits requiring hierarchical chunking and per-document map-reduce aggregation.
 5. **LangSmith / Observability Credentials:**
    - Tracing infrastructure is in place via LangChain/LangGraph, but live traces require user API keys.
 

@@ -151,6 +151,13 @@ class LangGraphAgent:
         new_evidence: List[Dict[str, Any]] = list(state.get("evidence", []))
         seen_ids = set(c.get("chunk_id") for c in new_evidence)
 
+        # Primary anchor retrieval on original query
+        orig_chunks = self.vector_store.query(state["query"], top_k=4)
+        for c in orig_chunks:
+            if c.get("chunk_id") not in seen_ids:
+                seen_ids.add(c.get("chunk_id"))
+                new_evidence.append(c)
+
         for step in plan:
             # If in retry mode, append specific qualifier to broaden search
             search_query = f"{step} technical details" if retry_count > 0 else step

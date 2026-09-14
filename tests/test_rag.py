@@ -184,3 +184,48 @@ def test_langgraph_loopback_retry():
     assert final_state["retry_count"] == 1
     assert final_state["validation"]["is_grounded"] is True
 
+
+def test_bm25_lexical_retrieval():
+    """Verifies that BM25Okapi scores keyword matches accurately."""
+    from core.bm25 import BM25Index
+    c1 = DocumentChunk(chunk_id="c1", doc_name="redis.md", chunk_index=0, content="Redis 7.2 cluster with 3 shards.", start_char=0, end_char=33)
+    c2 = DocumentChunk(chunk_id="c2", doc_name="pg.md", chunk_index=0, content="PostgreSQL 16 migration zero downtime.", start_char=0, end_char=38)
+    
+    bm25 = BM25Index([c1, c2])
+    results = bm25.search("Redis cluster shards", top_k=2)
+    assert len(results) >= 1
+    top_chunk, score = results[0]
+    assert top_chunk.chunk_id == "c1"
+    assert score > 0
+
+
+def test_reciprocal_rank_fusion():
+    """Verifies that Cormack RRF formula merges dense and sparse rankings."""
+    from core.bm25 import reciprocal_rank_fusion
+    dense = [
+        {"chunk_id": "c1", "content": "chunk 1", "metadata": {"source": "a"}},
+        {"chunk_id": "c2", "content": "chunk 2", "metadata": {"source": "b"}},
+    ]
+    c2_chunk = DocumentChunk(chunk_id="c2", doc_name="b", chunk_index=0, content="chunk 2", start_char=0, end_char=7)
+    c3_chunk = DocumentChunk(chunk_id="c3", doc_name="c", chunk_index=0, content="chunk 3", start_char=0, end_char=7)
+    sparse = [(c2_chunk, 10.0), (c3_chunk, 5.0)]
+
+    # c2 is in both (dense rank 2, sparse rank 1), so it should get highest RRF score
+    fused = reciprocal_rank_fusion(dense, sparse, rrf_k=60, top_k=3)
+    assert fused[0]["chunk_id"] == "c2"
+    assert "rrf_score" in fused[0]
+
+
+def test_vector_store_hybrid_query(tmp_path):
+    """Verifies VectorStore hybrid query mode."""
+    vs = VectorStore(persist_dir=str(tmp_path / "chroma"), collection_name="test_hybrid")
+    c1 = DocumentChunk(chunk_id="c1", doc_name="kafka.md", chunk_index=0, content="Apache Kafka event streaming.", start_char=0, end_char=30)
+    c2 = DocumentChunk(chunk_id="c2", doc_name="db.md", chunk_index=0, content="Relational database schema.", start_char=0, end_char=27)
+    vs.add_chunks([c1, c2])
+
+    hybrid_results = vs.query("Kafka event", top_k=1, mode="hybrid")
+    assert len(hybrid_results) == 1
+    assert hybrid_results[0]["chunk_id"] == "c1"
+    assert "rrf_score" in hybrid_results[0]
+
+
