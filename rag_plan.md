@@ -136,7 +136,7 @@ Score each case pass/fail against a rubric you define (grounded-in-evidence, ref
 | **Phase 1** | Manual Agent Loop | `phase1_agent_loop.py`, query decomposition | **Completed & Verified** (Decompose -> retrieve -> synthesize -> validate) |
 | **Phase 2** | Guardrails & 35-Case Eval | `core/guardrails.py`, `eval/run_eval.py` | **Completed & Verified** (82.9% pass rate, 29/35 benchmark; 100% on curated injection set vs 16.7% on novel unseen attacks) |
 | **Phase 3** | LangGraph Agent & Memory | `phase3_langgraph_agent.py`, `core/memory.py` | **Completed & Verified** (StateGraph routing, persistent recall via `data/user_memory.json`) |
-| **Phase 4** | CI/CD, Tracing, Extra Connector | `.github/workflows/eval.yml` | **Partially Complete** (CI workflow ready; LangSmith & Notion/Gmail live connector pending) |
+| **Phase 4** | CI/CD, Tracing, Extra Connector | `.github/workflows/eval.yml`, README badge | **CI/CD Completed & Verified** (GitHub Actions runs live on every push/PR with 82.9% pass rate, CI badge active) |
 
 ---
 
