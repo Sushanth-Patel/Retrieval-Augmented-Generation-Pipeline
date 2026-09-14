@@ -246,6 +246,8 @@ class LLMClient:
 
         gemini_key = os.getenv("GEMINI_API_KEY")
         openai_key = os.getenv("OPENAI_API_KEY")
+        groq_key = os.getenv("GROQ_API_KEY")
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
         dashscope_key = os.getenv("DASHSCOPE_API_KEY")
 
         if gemini_key:
@@ -257,11 +259,38 @@ class LLMClient:
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize Gemini ({e}), checking alternatives...")
 
+        if groq_key:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(
+                    api_key=groq_key,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+                self.provider = "groq"
+                self.default_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+                return
+            except Exception as e:
+                print(f"[LLMClient] Failed to initialize Groq ({e}), checking alternatives...")
+
+        if openrouter_key:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(
+                    api_key=openrouter_key,
+                    base_url="https://openrouter.ai/api/v1"
+                )
+                self.provider = "openrouter"
+                self.default_model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+                return
+            except Exception as e:
+                print(f"[LLMClient] Failed to initialize OpenRouter ({e}), checking alternatives...")
+
         if openai_key:
             try:
                 from openai import OpenAI
                 self.openai_client = OpenAI(api_key=openai_key)
                 self.provider = "openai"
+                self.default_model = "gpt-4o-mini"
                 return
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize OpenAI ({e}), checking alternatives...")
@@ -274,6 +303,7 @@ class LLMClient:
                     base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
                 )
                 self.provider = "dashscope"
+                self.default_model = "qwen-plus"
                 return
             except Exception as e:
                 print(f"[LLMClient] Failed to initialize DashScope ({e}), falling back to mock...")
@@ -296,13 +326,13 @@ class LLMClient:
                 )
                 return response.text or ""
 
-            elif self.provider in ("openai", "dashscope"):
+            elif self.provider in ("openai", "dashscope", "groq", "openrouter"):
                 messages = []
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
                 messages.append({"role": "user", "content": prompt})
 
-                model = "gpt-4o-mini" if self.provider == "openai" else "qwen-plus"
+                model = getattr(self, "default_model", "gpt-4o-mini")
                 response = self.openai_client.chat.completions.create(
                     model=model,
                     messages=messages,
