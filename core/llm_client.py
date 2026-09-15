@@ -395,8 +395,11 @@ class LLMClient:
     def __init__(self, force_mock: bool = False, rate_limiter: Optional[RateLimiter] = None):
         self.force_mock = force_mock
         self.provider = "mock"
+        self.openai_client = None
+        self.gemini_client = None
         self.rate_limiter = rate_limiter or RateLimiter()
         self._init_provider()
+
 
     def _init_provider(self):
         if self.force_mock:

@@ -284,8 +284,9 @@ def test_llm_client_auth_error_fail_fast():
     from core.llm_client import LLMClient, LLMAuthenticationError
     import pytest
 
-    client = LLMClient()
     with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GROQ_API_KEY", "gsk_test_fixture_key")
+        client = LLMClient()
         mp.setattr(client.openai_client, "api_key", "gsk_invalid_key_123")
         with pytest.raises(LLMAuthenticationError) as exc_info:
             client.complete("Test auth failure")
@@ -297,15 +298,17 @@ def test_llm_client_malformed_response():
     from core.llm_client import LLMClient, LLMMalformedResponseError
     import pytest
 
-    client = LLMClient()
     class EmptyResponse:
         choices = []
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GROQ_API_KEY", "gsk_test_fixture_key")
+        client = LLMClient()
         mp.setattr(client.openai_client.chat.completions, "create", lambda **kwargs: EmptyResponse())
         with pytest.raises(LLMMalformedResponseError) as exc_info:
             client.complete("Test malformed response")
         assert "empty or malformed response" in str(exc_info.value).lower()
+
 
 
 def test_input_guardrail_semantic_check_flags_novel_attack():
