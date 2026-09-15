@@ -195,7 +195,7 @@ def health_check():
     return {
         "status": "ok",
         "version": "1.0.0",
-        "live_ready": getattr(live_agent.llm, "openai_client", None) is not None,
+        "live_ready": live_agent.llm.is_live_ready,
         "default_mode": "mock" if force_mock_default else "live"
     }
 

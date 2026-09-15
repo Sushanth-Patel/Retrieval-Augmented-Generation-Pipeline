@@ -401,7 +401,19 @@ class LLMClient:
         self._init_provider()
 
 
+    @property
+    def is_live_ready(self) -> bool:
+        """Explicit readiness check: returns True only if a live upstream client is initialized."""
+        if self.force_mock or self.provider == "mock":
+            return False
+        if self.provider in ("groq", "openai", "openrouter", "dashscope"):
+            return self.openai_client is not None
+        if self.provider == "gemini":
+            return self.gemini_client is not None
+        return False
+
     def _init_provider(self):
+
         if self.force_mock:
             self.provider = "mock"
             return
