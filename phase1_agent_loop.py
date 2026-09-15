@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -63,9 +63,9 @@ class AgentLogger:
 class ManualAgent:
     """Manual agent orchestrator without third-party agent frameworks."""
 
-    def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False):
+    def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False, rate_limiter: Optional[Any] = None):
         self.vector_store = VectorStore(persist_dir=db_dir, collection_name="phoenix_knowledge_base")
-        self.llm = LLMClient(force_mock=force_mock)
+        self.llm = LLMClient(force_mock=force_mock, rate_limiter=rate_limiter)
         if self.vector_store.count() == 0:
             self._ingest_defaults()
 
@@ -175,9 +175,13 @@ class ManualAgent:
         logger.log_step("VALIDATE", {"verdict": verdict})
         return verdict
 
-    def run(self, query: str) -> Dict[str, Any]:
-        """Runs the full manual agent loop."""
+    def run(self, query: str, user: Optional[Any] = None) -> Dict[str, Any]:
+        """Runs the full manual agent loop with optional user context."""
         logger = AgentLogger()
+        if user is not None:
+            uid = user.user_id if hasattr(user, "user_id") else str(user)
+            roles = getattr(user, "roles", ["unknown"])
+            logger.log_step("AUTH", {"user_id": uid, "roles": roles})
 
         # Step 1: Decompose
         plan = self.decompose(query, logger)

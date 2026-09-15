@@ -20,3 +20,16 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Scratch probes and screenshots
+probe_*.py
+dump_*.py
+audit_*.py
+eval_guardrail_hardened.py
+eval_unconditional_*.py
+verify_rate_limiter.py
+verify_typed_errors.py
+test_semantic_classifier_prompt.py
+run_2_concurrent.py
+ui_*.png
+data/users/

@@ -71,14 +71,28 @@ class NaiveChunker:
         return chunks
 
     def chunk_file(self, file_path: Path) -> List[DocumentChunk]:
-        """Reads a file and splits it into chunks."""
-        text = file_path.read_text(encoding="utf-8")
+        """Reads a file and splits it into chunks using DocumentParser."""
+        try:
+            from core.document_parser import DocumentParser
+            text = DocumentParser.to_text(file_path)
+        except Exception:
+            text = file_path.read_text(encoding="utf-8")
         return self.chunk_text(text, doc_name=file_path.name, extra_metadata={"file_path": str(file_path)})
 
-    def chunk_directory(self, dir_path: Path, glob_pattern: str = "*.md") -> List[DocumentChunk]:
-        """Chunks all matching documents in a directory."""
+    def chunk_directory(self, dir_path: Path, glob_pattern: str = None) -> List[DocumentChunk]:
+        """Chunks all matching documents in a directory.
+        If glob_pattern is None, chunks all files with extensions supported by DocumentParser.
+        """
         all_chunks: List[DocumentChunk] = []
-        files = sorted(dir_path.glob(glob_pattern))
+        if glob_pattern is not None:
+            files = sorted(dir_path.glob(glob_pattern))
+        else:
+            try:
+                from core.document_parser import DocumentParser
+                supported = DocumentParser.SUPPORTED_EXTENSIONS
+            except Exception:
+                supported = {".md", ".txt", ".json", ".pdf", ".docx", ".xlsx", ".xls"}
+            files = sorted([f for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in supported])
         for f in files:
             all_chunks.extend(self.chunk_file(f))
         return all_chunks

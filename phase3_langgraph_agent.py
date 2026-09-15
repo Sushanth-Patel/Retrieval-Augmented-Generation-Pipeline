@@ -58,15 +58,16 @@ class AgentState(TypedDict):
     short_term_history: List[Dict[str, str]]
     long_term_facts: List[str]
     finished: bool
+    user_id: Optional[str]
 
 
 class LangGraphAgent:
     """Production state machine agent with session memory and loop-back routing."""
 
-    def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False):
+    def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False, rate_limiter: Optional[Any] = None):
         self.vector_store = VectorStore(persist_dir=db_dir, collection_name="phoenix_knowledge_base")
         self.memory = MemoryStore()
-        self.llm = LLMClient(force_mock=force_mock)
+        self.llm = LLMClient(force_mock=force_mock, rate_limiter=rate_limiter)
         if self.vector_store.count() == 0:
             self._ingest_defaults()
         self.graph = self._build_graph()
@@ -111,10 +112,12 @@ class LangGraphAgent:
         query = state["query"]
         console.print(f"[bold cyan]StateGraph -> [plan_node][/bold cyan]: Planning for \"{query}\"")
 
-        # 1. Recall explicit facts from long-term memory
-        facts = self.memory.search_facts(query)
+        # 1. Recall explicit facts from long-term memory (scoped to user if authenticated)
+        user_id = state.get("user_id")
+        mem_store = MemoryStore(user_id=user_id) if user_id else self.memory
+        facts = mem_store.search_facts(query)
         if facts:
-            console.print(f"[dim]Recalled {len(facts)} long-term facts: {facts}[/dim]")
+            console.print(f"[dim]Recalled {len(facts)} long-term facts (user={user_id or 'global'}): {facts}[/dim]")
 
         # 2. Plan sub-questions
         prompt = (
@@ -185,14 +188,15 @@ class LangGraphAgent:
         facts_str = "\n".join(f"- {f}" for f in facts) if facts else "None"
 
         prompt = (
-            f"You are a Senior Principal Engineer synthesizing evidence from internal engineering documents.\n\n"
+            f"You are an AI Engineering Assistant for an internal engineering knowledge base.\n\n"
             f"Long-term Memory Facts:\n{facts_str}\n\n"
             f"Retrieved Evidence Chunks:\n{context_str}\n\n"
             f"Original Query: {query}\n\n"
             f"Instructions:\n"
-            f"1. Directly answer the user query.\n"
-            f"2. Cite document sources explicitly for every key claim.\n"
-            f"3. Incorporate long-term memory facts where relevant.\n\n"
+            f"1. If the user query is a greeting or polite conversational inquiry (e.g., 'hi', 'hello', 'how are you', 'how is the weather'), respond politely and conversationally. Introduce yourself as the internal engineering knowledge base assistant, state what you can help with (e.g., architecture RFCs, incident post-mortems, system specs, or uploaded documents), and do NOT cite or list unrelated engineering documents.\n"
+            f"2. If the user asks about real-time or external topics not present in internal documentation (such as current weather or live external events), clearly and concisely state that you do not have access to real-time external data, and invite them to ask about internal engineering systems.\n"
+            f"3. For technical questions about internal systems, answer directly using the retrieved evidence and cite document sources explicitly (e.g., [Source: doc_name.md]) for every factual claim.\n"
+            f"4. Incorporate long-term memory facts where relevant.\n\n"
             f"Synthesized Answer:"
         )
 
@@ -245,8 +249,17 @@ class LangGraphAgent:
         console.print(f"[bold yellow]Validation flagged ungrounded output. Triggering loop-back retry #{retry_count}...[/bold yellow]")
         return "retry"
 
-    def run(self, query: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
-        """Runs the LangGraph agent state machine."""
+    def remember(self, key: str, fact: str, category: str = "user_preference", user_id: Optional[str] = None):
+        """Explicitly stores a fact in memory, scoped to user_id if provided."""
+        mem_store = MemoryStore(user_id=user_id) if user_id else self.memory
+        mem_store.remember(key, fact, category=category)
+
+    def run(self, query: str, conversation_history: Optional[List[Dict[str, str]]] = None, user: Optional[Any] = None) -> Dict[str, Any]:
+        """Runs the LangGraph agent state machine with optional authenticated user context."""
+        uid = None
+        if user is not None:
+            uid = user.user_id if hasattr(user, "user_id") else str(user)
+
         initial_state: AgentState = {
             "query": query,
             "plan": [],
@@ -257,7 +270,8 @@ class LangGraphAgent:
             "retry_count": 0,
             "short_term_history": conversation_history or [],
             "long_term_facts": [],
-            "finished": False
+            "finished": False,
+            "user_id": uid
         }
 
         final_state = self.graph.invoke(initial_state)

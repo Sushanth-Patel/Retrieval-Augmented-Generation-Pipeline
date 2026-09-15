@@ -5,6 +5,7 @@ architectural decisions, user preferences), saving directly to disk.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -13,8 +14,24 @@ from datetime import datetime, timezone
 class MemoryStore:
     """Explicit persistent memory store for user and project facts."""
 
-    def __init__(self, storage_path: str = "data/user_memory.json"):
-        self.storage_path = Path(storage_path)
+    def __init__(self, storage_path: str = "data/user_memory.json", user_id: Optional[str] = None):
+        # Sanitize user_id to prevent directory traversal and handle whitespace/empty tokens
+        clean_uid = None
+        if user_id:
+            stripped = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(user_id).strip())
+            if stripped.replace("_", ""):
+                clean_uid = stripped
+
+        self.user_id = clean_uid
+        p = Path(storage_path)
+
+        # If user_id is specified and valid, store memory in per-user file for strong isolation
+        if self.user_id:
+            self.storage_path = p.parent / f"users/{self.user_id}_memory.json"
+        else:
+            # Global fallback partition for shared public engineering facts
+            self.storage_path = p
+
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self.facts: Dict[str, Dict[str, Any]] = {}
         self._load()
@@ -26,8 +43,8 @@ class MemoryStore:
                 self.facts = json.loads(self.storage_path.read_text(encoding="utf-8"))
             except Exception:
                 self.facts = {}
-        else:
-            # Seed default known facts for testing & demo
+        elif not self.user_id:
+            # Seed default known facts for shared global testing & demo
             self.facts = {
                 "preferred_db_version": {
                     "fact": "Target PostgreSQL version for Project Phoenix is 16.2.",
@@ -41,6 +58,8 @@ class MemoryStore:
                 }
             }
             self.save()
+        else:
+            self.facts = {}
 
     def save(self):
         """Persists facts to disk."""
@@ -51,6 +70,7 @@ class MemoryStore:
         self.facts[key] = {
             "fact": fact,
             "category": category,
+            "user_id": self.user_id,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         self.save()

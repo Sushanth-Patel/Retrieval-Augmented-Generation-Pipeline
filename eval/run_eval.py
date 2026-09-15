@@ -46,10 +46,13 @@ class EvaluationHarness:
         self.confirmation_gate = ConfirmationGate()
         self.agent_type = agent_type
         self.force_mock = force_mock
+        from core.llm_client import RateLimiter
+        # In batch eval, allow pacing waits up to 45s when TPM window is full rather than aborting the benchmark
+        eval_rate_limiter = RateLimiter(max_wait_seconds=45.0)
         if agent_type == "langgraph":
-            self.agent = LangGraphAgent(force_mock=force_mock)
+            self.agent = LangGraphAgent(force_mock=force_mock, rate_limiter=eval_rate_limiter)
         else:
-            self.agent = ManualAgent(force_mock=force_mock)
+            self.agent = ManualAgent(force_mock=force_mock, rate_limiter=eval_rate_limiter)
         
         if self.agent.vector_store.count() == 0:
             from core.chunker import NaiveChunker

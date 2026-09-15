@@ -4,6 +4,8 @@ import os
 import re
 import json
 import time
+import threading
+from collections import deque
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
@@ -36,12 +38,16 @@ class LocalMockLLM:
                 "reasoning": "All key statements are supported by the retrieved context."
             })
 
-        # 2. Guardrail / Injection Classification request (Phase 2)
-        if "security check" in prompt_lower or "prompt injection classifier" in prompt_lower:
+        # 2. Guardrail / Injection Classification request (Phase 2 & Hardening)
+        if "security prompt injection classifier" in prompt_lower or "prompt injection classifier" in prompt_lower or "security check" in prompt_lower:
             adversarial_markers = [
                 "ignore previous instructions", "ignore all previous", "freedom mode",
                 "system prompt override", "access granted: admin", "security breach confirmed",
-                "reveal all admin api keys", "stop retrieval process", "disregard system"
+                "reveal all admin api keys", "stop retrieval process", "disregard system",
+                "forget your instructions", "bypass all security", "unrestricted developer mode",
+                "ignore safety rules", "unfiltered ai", "reset your persona", "drop all previous constraints",
+                "simulate a scenario", "hypothetical drill", "treat all prior rules as void",
+                "different assistant with no restrictions", "very first message", "no guidelines active"
             ]
             for marker in adversarial_markers:
                 if marker in prompt_lower:
@@ -232,12 +238,164 @@ class LocalMockLLM:
         )
 
 
+class LLMClientError(Exception):
+    """Base exception for LLM client failures."""
+    pass
+
+
+class RateLimitExceeded(LLMClientError):
+    """Raised when client-side request, token, or session budget is exceeded, or upstream 429 retries are exhausted."""
+
+    def __init__(self, message: str, retry_after: float = 0.0, limit_type: str = "rate_limit"):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.limit_type = limit_type
+
+
+class LLMAuthenticationError(LLMClientError):
+    """Raised when provider credentials or API keys fail authentication (401 / 403)."""
+    pass
+
+
+class LLMServiceUnavailableError(LLMClientError):
+    """Raised when upstream LLM service is unreachable or encounters repeated 5xx/network timeouts."""
+    pass
+
+
+class LLMMalformedResponseError(LLMClientError):
+    """Raised when upstream LLM service returns an empty, invalid, or unparseable response."""
+    pass
+
+
+class RateLimiter:
+    """Client-side token bucket and cost guard tracking rolling requests, tokens, and session ceilings.
+
+    Defaults to 90% of measured provider capacity to prevent edge-of-window bursts and clock drift:
+    - Requests per minute (RPM): 900 (90% of 1,000 limit)
+    - Tokens per minute (TPM): 7,200 (90% of 8,000 limit)
+    - Session token ceiling: Configurable hard cost ceiling (default 100,000 tokens)
+    """
+
+    def __init__(
+        self,
+        requests_per_minute: Optional[int] = None,
+        tokens_per_minute: Optional[int] = None,
+        max_session_tokens: Optional[int] = None,
+        max_wait_seconds: Optional[float] = None,
+    ):
+        self.rpm = requests_per_minute if requests_per_minute is not None else int(os.getenv("RATE_LIMIT_RPM", "900"))
+        self.tpm = tokens_per_minute if tokens_per_minute is not None else int(os.getenv("RATE_LIMIT_TPM", "7200"))
+        self.max_session_tokens = max_session_tokens if max_session_tokens is not None else int(os.getenv("RATE_LIMIT_SESSION_TOKENS", "100000"))
+        self.max_wait_seconds = max_wait_seconds if max_wait_seconds is not None else float(os.getenv("RATE_LIMIT_MAX_WAIT", "10.0"))
+
+        self.request_timestamps: deque = deque()
+        self.token_history: deque = deque()  # stores (timestamp, token_count)
+        self.total_session_tokens: int = 0
+        self.total_session_requests: int = 0
+        self._lock = threading.Lock()
+
+    def _prune(self, now: float):
+        """Prunes sliding window records older than 60 seconds (must be called with self._lock held or externally safe)."""
+        cutoff = now - 60.0
+        while self.request_timestamps and self.request_timestamps[0] < cutoff:
+            self.request_timestamps.popleft()
+        while self.token_history and self.token_history[0][0] < cutoff:
+            self.token_history.popleft()
+
+    def get_current_tpm(self, now: Optional[float] = None) -> int:
+        with self._lock:
+            now = now or time.time()
+            self._prune(now)
+            return sum(tokens for _, tokens in self.token_history)
+
+    def get_current_rpm(self, now: Optional[float] = None) -> int:
+        with self._lock:
+            now = now or time.time()
+            self._prune(now)
+            return len(self.request_timestamps)
+
+    def acquire(self, estimated_tokens: int = 500) -> float:
+        """Checks rate limits and waits if necessary, or raises RateLimitExceeded.
+
+        Returns:
+            float: Number of seconds slept (if any).
+        """
+        with self._lock:
+            now = time.time()
+
+            # 1. Hard Session Cost Ceiling Check
+            if self.total_session_tokens + estimated_tokens > self.max_session_tokens:
+                raise RateLimitExceeded(
+                    f"[Cost Guard] Session token ceiling exceeded! Used {self.total_session_tokens:,} tokens "
+                    f"(limit: {self.max_session_tokens:,}). Halting execution to prevent cost overruns.",
+                    limit_type="session_ceiling"
+                )
+
+            self._prune(now)
+
+            # 2. Check Request Budget (RPM)
+            wait_for_request = 0.0
+            if len(self.request_timestamps) >= self.rpm:
+                oldest = self.request_timestamps[0]
+                wait_for_request = max(0.0, (oldest + 60.0) - now)
+
+            # 3. Check Token Budget (TPM)
+            wait_for_tokens = 0.0
+            current_tokens = sum(tokens for _, tokens in self.token_history)
+            if current_tokens + estimated_tokens > self.tpm:
+                tokens_to_free = (current_tokens + estimated_tokens) - self.tpm
+                freed = 0
+                needed_timestamp = now
+                for ts, tok in self.token_history:
+                    freed += tok
+                    if freed >= tokens_to_free:
+                        needed_timestamp = ts
+                        break
+                wait_for_tokens = max(0.0, (needed_timestamp + 60.0) - now)
+
+            total_wait = max(wait_for_request, wait_for_tokens)
+
+            # 4. Fail-fast if wait exceeds reasonable bound
+            if total_wait > self.max_wait_seconds:
+                raise RateLimitExceeded(
+                    f"[Rate Limiter] Rate limit exceeded. Required wait of {total_wait:.2f}s exceeds "
+                    f"maximum allowed wait ({self.max_wait_seconds:.2f}s). Current RPM: {len(self.request_timestamps)}/{self.rpm}, "
+                    f"Current TPM: {current_tokens + estimated_tokens}/{self.tpm}.",
+                    retry_after=round(total_wait, 2),
+                    limit_type="rate_limit"
+                )
+
+            if total_wait > 0.0:
+                print(f"[RateLimiter] Pacing request: sleeping {total_wait:.2f}s to respect rate limits (RPM: {len(self.request_timestamps)}/{self.rpm}, TPM: {current_tokens + estimated_tokens}/{self.tpm})...")
+                time.sleep(total_wait)
+                now = time.time()
+                self._prune(now)
+
+            # Record reserved usage
+            self.request_timestamps.append(now)
+            self.token_history.append((now, estimated_tokens))
+            self.total_session_tokens += estimated_tokens
+            self.total_session_requests += 1
+
+            return total_wait
+
+    def record_actual_tokens(self, estimated_tokens: int, actual_tokens: int):
+        """Reconciles estimated reserved tokens with actual returned token count."""
+        with self._lock:
+            diff = actual_tokens - estimated_tokens
+            self.total_session_tokens = max(0, self.total_session_tokens + diff)
+            if self.token_history:
+                last_ts, last_tok = self.token_history.pop()
+                self.token_history.append((last_ts, max(0, last_tok + diff)))
+
+
 class LLMClient:
     """Unified client routing to Gemini, OpenAI, DashScope, or LocalMockLLM."""
 
-    def __init__(self, force_mock: bool = False):
+    def __init__(self, force_mock: bool = False, rate_limiter: Optional[RateLimiter] = None):
         self.force_mock = force_mock
         self.provider = "mock"
+        self.rate_limiter = rate_limiter or RateLimiter()
         self._init_provider()
 
     def _init_provider(self):
@@ -316,13 +474,21 @@ class LLMClient:
         self.provider = "mock"
 
     def complete(self, prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.0, max_tokens: int = 1024) -> str:
-        """Executes a completion call against the active provider with exponential backoff on 429."""
+        """Executes a completion call against the active provider with client rate limiting and server 429 backoff."""
         if self.provider == "mock":
             return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
 
+        # 1. Enforce client-side rate limits & cost ceilings (raises RateLimitExceeded on hard ceiling or excessive wait)
+        estimated_input_tokens = max(1, int((len(prompt) + len(system_prompt or "")) / 3.5))
+        # Estimate expected tokens: min(max_tokens, 256) for pacing check, reconciled on actual response
+        estimated_total_tokens = estimated_input_tokens + min(max_tokens, 256)
+        self.rate_limiter.acquire(estimated_tokens=estimated_total_tokens)
+
+        # 2. Execute with server-side 429 backoff retry
         max_attempts = 4
         for attempt in range(max_attempts):
             try:
+                finish_reason = None
                 if self.provider == "gemini":
                     contents = prompt
                     if system_prompt:
@@ -331,7 +497,10 @@ class LLMClient:
                         model=getattr(self, "default_model", "gemini-2.5-flash"),
                         contents=contents,
                     )
-                    return response.text or ""
+                    text = response.text or ""
+                    if hasattr(response, "candidates") and response.candidates:
+                        cand = response.candidates[0]
+                        finish_reason = getattr(cand, "finish_reason", None)
 
                 elif self.provider in ("openai", "dashscope", "groq", "openrouter"):
                     messages = []
@@ -346,18 +515,76 @@ class LLMClient:
                         temperature=temperature,
                         max_tokens=max_tokens
                     )
-                    text = response.choices[0].message.content or ""
-                    return text
+                    if not response or not hasattr(response, "choices") or not response.choices:
+                        raise LLMMalformedResponseError(f"[{self.provider}] Empty or malformed response returned from API.")
+
+                    choice = response.choices[0]
+                    text = getattr(choice.message, "content", "") or ""
+                    finish_reason = getattr(choice, "finish_reason", None)
+
+                    if hasattr(response, "usage") and response.usage:
+                        actual_tokens = getattr(response.usage, "total_tokens", None)
+                        if actual_tokens:
+                            self.rate_limiter.record_actual_tokens(estimated_total_tokens, actual_tokens)
+
+                # Validate response content
+                if not text or not text.strip():
+                    raise LLMMalformedResponseError(f"[{self.provider}] Received empty text in response.")
+
+                if str(finish_reason).lower() in ("length", "max_tokens"):
+                    print(f"[LLMClient Warning] Response was truncated by max_tokens limit ({max_tokens}).")
+
+                return text
+
+            except LLMClientError:
+                # Re-raise already typed internal exceptions
+                raise
 
             except Exception as e:
-                err_msg = str(e)
-                if ("429" in err_msg or "rate limit" in err_msg.lower()) and attempt < max_attempts - 1:
+                err_msg = str(e).lower()
+                err_type = type(e).__name__
+
+                # 1. Auth Failures (401 / 403 / Invalid API Key) -> Fail fast immediately, never fallback to mock
+                if "401" in err_msg or "403" in err_msg or "invalid api key" in err_msg or "invalid_api_key" in err_msg or "authentication" in err_msg:
+                    raise LLMAuthenticationError(
+                        f"[LLMClient Auth Failure] Provider '{self.provider}' failed authentication: {e}. "
+                        f"Check that your API key is valid and configured."
+                    ) from e
+
+                # 2. Upstream Rate Limits (429 / Too Many Requests)
+                if ("429" in err_msg or "rate limit" in err_msg) and attempt < max_attempts - 1:
                     backoff = (2 ** attempt) * 2
-                    print(f"[LLMClient RateLimit] Provider {self.provider} hit 429: backing off for {backoff}s (attempt {attempt+1}/{max_attempts-1})...")
+                    print(f"[LLMClient RateLimit] Provider '{self.provider}' hit 429: backing off for {backoff}s (attempt {attempt+1}/{max_attempts-1})...")
                     time.sleep(backoff)
                     continue
+                elif "429" in err_msg or "rate limit" in err_msg:
+                    raise RateLimitExceeded(
+                        f"[LLMClient RateLimit] Provider '{self.provider}' 429 retries exhausted ({max_attempts} attempts): {e}",
+                        limit_type="upstream_429"
+                    ) from e
 
-                print(f"[LLMClient Warning] {self.provider} API failed ({e}), falling back to deterministic local engine.")
-                return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
+                # 3. Transient Network / Timeout / 5xx Server Errors
+                is_transient = (
+                    "timeout" in err_msg
+                    or "timed out" in err_msg
+                    or "connection error" in err_msg
+                    or "connecterror" in err_msg
+                    or "500" in err_msg
+                    or "502" in err_msg
+                    or "503" in err_msg
+                    or "504" in err_msg
+                )
+                if is_transient and attempt < 2:  # Retry up to 2 times for transient network failures
+                    backoff = 2.0 * (attempt + 1)
+                    print(f"[LLMClient Network] Transient failure ({e}): retrying in {backoff}s (attempt {attempt+1}/2)...")
+                    time.sleep(backoff)
+                    continue
+                elif is_transient:
+                    raise LLMServiceUnavailableError(
+                        f"[LLMClient Unavailable] Provider '{self.provider}' unreachable after network/timeout retries: {e}"
+                    ) from e
 
-        return LocalMockLLM().complete(prompt, system_prompt=system_prompt)
+                # 4. Any other unhandled provider error -> raise typed error rather than silently masking
+                raise LLMClientError(f"[LLMClient Unhandled Error] Provider '{self.provider}' call failed: {e}") from e
+
+        raise LLMServiceUnavailableError(f"[LLMClient] Provider '{self.provider}' failed to complete after {max_attempts} attempts.")

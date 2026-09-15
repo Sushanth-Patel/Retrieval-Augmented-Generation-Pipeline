@@ -1,0 +1,70 @@
+# =============================================================================
+# .dockerignore — Agentic RAG Pipeline
+# Excludes dev artifacts, caches, secrets, and large unneeded files from
+# the Docker build context to minimize image size and prevent secret leaks.
+# =============================================================================
+
+# Virtual environment — never ship .venv into the container
+.venv/
+venv/
+
+# Git metadata
+.git/
+.github/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.pytest_tmp/
+
+# Environment files — secrets must be injected via Cloud Run Secrets at runtime
+.env
+.env.*
+!.env.example
+
+# ChromaDB data — vector store is rebuilt from /reindex in each container instance
+# For persistence, mount an external volume or use Cloud Storage FUSE
+.chroma_db/
+
+# Per-user memory stores — not committed to container, mounted at runtime
+data/users/
+
+# Development evaluation, tests, and sample upload fixtures (not needed at runtime)
+tests/
+eval/
+data/sample_uploads/
+eval_*.py
+probe_*.py
+verify_*.py
+audit_*.py
+dump_*.py
+run_2_concurrent.py
+test_concurrency.py
+test_concurrent_reindex_and_query.py
+verify_rate_limiter.py
+verify_typed_errors.py
+test_semantic_classifier_prompt.py
+
+# Phase scripts (predecessor prototype files not imported by app.py)
+phase0_naive_rag.py
+phase1_agent_loop.py
+
+# Documentation plan files
+rag_plan.md
+rag_paln.md
+
+# OS and editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Log files
+*.log
+logs/
