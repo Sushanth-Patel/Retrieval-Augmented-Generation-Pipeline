@@ -18,10 +18,30 @@ if "XDG_CACHE_HOME" not in os.environ:
         os.makedirs(tmp_cache, exist_ok=True)
         os.environ["XDG_CACHE_HOME"] = tmp_cache
 
+import hashlib
+import math
 import chromadb
 from chromadb.config import Settings
+from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 from core.chunker import DocumentChunk
 from core.bm25 import BM25Index, reciprocal_rank_fusion
+
+
+class FastLightweightEmbeddingFunction(EmbeddingFunction):
+    """Zero-memory 384-dim normalized hashing embedding function for restricted RAM containers (512MB free tier)."""
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = []
+        for text in input:
+            vec = [0.0] * 384
+            words = text.lower().split()
+            for w in words:
+                h = int(hashlib.sha256(w.encode("utf-8")).hexdigest(), 16)
+                idx = h % 384
+                val = 1.0 if (h % 2 == 0) else -1.0
+                vec[idx] += val
+            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+            embeddings.append([v / norm for v in vec])
+        return embeddings
 
 
 class VectorStore:
@@ -47,8 +67,12 @@ class VectorStore:
             else:
                 self.client = chromadb.Client(settings=Settings(anonymized_telemetry=False))
 
+            use_fast = os.getenv("USE_LIGHTWEIGHT_EMBEDDINGS", "true").lower() in ("true", "1", "yes") or os.getenv("FORCE_MOCK", "false").lower() in ("true", "1", "yes")
+            ef = FastLightweightEmbeddingFunction() if use_fast else None
+
             self._collection = self.client.get_or_create_collection(
                 name=self.collection_name,
+                embedding_function=ef,
                 metadata={"hnsw:space": "cosine"}
             )
             if self.bm25 is None and self._collection.count() > 0:

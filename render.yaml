@@ -7,5 +7,7 @@ services:
     envVars:
       - key: FORCE_MOCK
         value: "true"
+      - key: USE_LIGHTWEIGHT_EMBEDDINGS
+        value: "true"
       - key: XDG_CACHE_HOME
         value: "/tmp/.cache"
