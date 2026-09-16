@@ -35,3 +35,4 @@ ui_*.png
 data/users/
 scratch/
 data/sample_docs/test.md
+.netlify/
