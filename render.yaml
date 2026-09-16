@@ -9,3 +9,5 @@ services:
         value: 3.11.9
       - key: FORCE_MOCK
         value: "true"
+      - key: XDG_CACHE_HOME
+        value: "/tmp/.cache"

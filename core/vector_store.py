@@ -1,7 +1,23 @@
-"""ChromaDB Vector Store wrapper with Hybrid Dense + BM25 Reciprocal Rank Fusion (RRF)."""
-
+import os
+import tempfile
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+
+# Ensure writable cache directory for ChromaDB ONNX models & HuggingFace models
+if "XDG_CACHE_HOME" not in os.environ:
+    user_cache = os.path.expanduser("~/.cache")
+    try:
+        os.makedirs(user_cache, exist_ok=True)
+        test_file = os.path.join(user_cache, ".permissions_test")
+        with open(test_file, "w") as f:
+            f.write("1")
+        os.remove(test_file)
+        os.environ["XDG_CACHE_HOME"] = user_cache
+    except (PermissionError, OSError):
+        tmp_cache = os.path.join(tempfile.gettempdir(), ".cache")
+        os.makedirs(tmp_cache, exist_ok=True)
+        os.environ["XDG_CACHE_HOME"] = tmp_cache
+
 import chromadb
 from chromadb.config import Settings
 from core.chunker import DocumentChunk

@@ -42,9 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Non-root security context: create appuser (UID 10001) to prevent privilege escalation
+# Non-root security context: create appuser (UID 10001) with home directory
 RUN groupadd --system --gid 10001 appgroup \
-    && useradd --system --uid 10001 --gid appgroup --no-create-home appuser
+    && useradd --system --uid 10001 --gid appgroup --create-home --home-dir /home/appuser appuser
 
 WORKDIR /app
 
@@ -58,16 +58,19 @@ COPY --chown=appuser:appgroup . .
 # data/sample_docs: source documents for ingestion
 # data/users: per-user memory stores
 # .chroma_db: ChromaDB vector store persistence
-RUN mkdir -p data/sample_docs data/users .chroma_db static/css static/js \
-    && chown -R appuser:appgroup data .chroma_db static
+# /home/appuser/.cache & /tmp/.cache: ONNX / HuggingFace model download cache
+RUN mkdir -p data/sample_docs data/users .chroma_db static/css static/js /home/appuser/.cache /tmp/.cache \
+    && chown -R appuser:appgroup data .chroma_db static /home/appuser /tmp/.cache
 
 # Drop root — run as non-privileged user
 USER appuser
 
-# Cloud Run injects PORT env var; default 8080
+# Cloud Run / Render inject PORT env var; default 8080
 ENV PORT=8080 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/home/appuser \
+    XDG_CACHE_HOME=/home/appuser/.cache
 
 EXPOSE ${PORT}
 
