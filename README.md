@@ -1,14 +1,14 @@
-# Enterprise AI Knowledge Engine
+# RAG (Retrieval-Augmented Generation) Pipeline
 
-A production-ready Retrieval-Augmented Generation (RAG) system built in Python, featuring hybrid vector search, multi-provider LLM fallback, enterprise security guardrails, and an interactive web interface.
+A simple, production-ready system that lets you upload your own documents (PDFs, Word files, spreadsheets, web pages) and ask questions about them to get accurate, grounded AI answers backed by real citations.
 
 ---
 
 ## 📌 What is RAG?
 
-**RAG (Retrieval-Augmented Generation)** is an AI architecture that enhances Large Language Models (LLMs) by connecting them to external knowledge sources (such as internal documentation, technical RFCs, incident postmortems, or database records).
+**RAG (Retrieval-Augmented Generation)** is an AI architecture that enhances Large Language Models (LLMs) by connecting them to external knowledge sources (such as internal company files, technical documents, or database records).
 
-Standard LLMs can only answer based on data they were trained on and may hallucinate or give outdated information. A RAG system solves this by **retrieving relevant facts from your own documents first**, injecting those facts into the prompt, and allowing the model to generate accurate, up-to-date answers backed by real citations.
+Standard AI models can only answer based on past training data and may hallucinate or give outdated answers. A RAG system solves this by **retrieving relevant facts from your own documents first**, injecting those facts into the prompt, and generating accurate, up-to-date responses.
 
 ---
 
@@ -16,37 +16,37 @@ Standard LLMs can only answer based on data they were trained on and may halluci
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion["1. Document Ingestion & Indexing"]
-        Docs[Raw Documents: PDF, Word, Excel, Markdown] --> Parser[Document Parser]
-        Parser --> Chunker[Chunker & Text Splitting]
-        Chunker --> VectorStore[(ChromaDB Vector Store)]
-        Chunker --> LexicalStore[(BM25 Lexical Index)]
+    subgraph Step1["1. Data Ingestion & Chunking"]
+        Docs[Raw Documents: PDFs, DOCX, XLSX, Web] --> Extract[Text Extraction]
+        Extract --> Chunk[Chunking: Text Segmentation]
     end
 
-    subgraph UserQuery["2. Query Processing & Hybrid Search"]
-        User[User Question] --> GuardIn[Input Security Guardrail]
-        GuardIn -- Safe --> Search[Hybrid Search: Dense + BM25]
-        Search --> RRF[Reciprocal Rank Fusion]
+    subgraph Step2["2. Embedding & Vector Storage"]
+        Chunk --> Embed[Embedding Generation: Vectors]
+        Embed --> VectorDB[(Vector Database: ChromaDB)]
     end
 
-    subgraph Synthesis["3. Augmentation & Generation"]
-        RRF --> Context[Enriched Prompt Context]
-        Context --> LLMChain[Multi-Provider LLM Fallback Engine]
-        LLMChain --> Validator[Groundedness & Validation]
+    subgraph Step3["3. Query & Retrieval"]
+        Query[User Question] --> QueryEmbed[Query Vector Conversion]
+        QueryEmbed --> Search[Vector Similarity Retrieval]
+        Search --> VectorDB
     end
 
-    subgraph SecurityOutput["4. Safety & Response Rendering"]
-        Validator --> GuardOut[Output Guardrail: PII Redaction]
-        GuardOut --> Output[Final Answer with Citations & UI Badges]
+    subgraph Step4["4. Augmented Generation & Safety"]
+        VectorDB --> Context[Retrieved Context + User Query]
+        Context --> LLM[LLM Generator]
+        LLM --> Response[Grounded Response with Citations]
     end
 ```
 
-### Detailed Workflow Steps
+### Workflow Steps
 
-1. **Ingestion & Indexing**: External documents (PDF, DOCX, XLSX, Markdown) are parsed, divided into chunks, and stored as vector embeddings in ChromaDB and keyword indexes in BM25.
-2. **Input Security & Hybrid Retrieval**: User queries pass through input security screening. Safe queries trigger a hybrid search combining dense semantic vectors and sparse BM25 keywords, fused using Reciprocal Rank Fusion (RRF).
-3. **Augmentation & Generation**: The highest-ranked evidence chunks enrich the prompt context. The system calls the multi-provider LLM engine (Gemini, OpenAI, Groq, DashScope, or Local Mock) to generate an answer.
-4. **Output Safety & Citation**: Output guardrails mask sensitive PII (emails, phone numbers) before rendering the verified response alongside source document citations.
+- **Data Ingestion**: Raw documents (like PDFs, Word, Excel, databases, or web pages) are collected and extracted into text.
+- **Chunking**: Large documents are split into smaller, manageable text segments to improve search accuracy.
+- **Embedding Generation**: An embedding model converts text chunks into numerical vectors that capture their semantic meaning.
+- **Vector Storage**: The vectors and their text are stored in a Vector Database for fast similarity searches.
+- **Retrieval**: When a user asks a question, the system converts the query into a vector and searches the database for the most relevant text chunks.
+- **Augmented Generation**: The retrieved context and the original user query are combined into a prompt and sent to the LLM, which writes a grounded response.
 
 ---
 
@@ -66,7 +66,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the Web Application
+### 2. Run the Application
 
 ```bash
 python app.py
