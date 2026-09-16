@@ -127,19 +127,12 @@
     const heroGreeting = document.getElementById('hero-greeting');
     if (!heroGreeting) return;
 
-    const hour = new Date().getHours();
-    let timeOfDay = 'morning';
-    if (hour >= 12 && hour < 17) {
-      timeOfDay = 'afternoon';
-    } else if (hour >= 17) {
-      timeOfDay = 'evening';
-    }
-
-    let name = '';
     if (state.userProfile && state.userProfile.name && !state.userProfile.name.includes('Alice')) {
-      name = state.userProfile.name.split(' ')[0];
+      const name = state.userProfile.name.split(' ')[0];
+      heroGreeting.textContent = `Welcome, ${name}. How can I help you today?`;
+    } else {
+      heroGreeting.textContent = `How can I help you today?`;
     }
-    heroGreeting.textContent = name ? `Good ${timeOfDay}, ${name}` : `Good ${timeOfDay}`;
   }
 
   function requestAutomaticPermissions() {
