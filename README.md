@@ -1,6 +1,6 @@
-# Agentic RAG Pipeline
+# Enterprise AI Knowledge Engine
 
-A lightweight, enterprise-ready Retrieval-Augmented Generation (RAG) system built in Python, featuring multi-provider LLM fallback, hybrid vector search, security guardrails, and an interactive web interface.
+A production-ready Retrieval-Augmented Generation (RAG) system built in Python, featuring hybrid vector search, multi-provider LLM fallback, enterprise security guardrails, and an interactive web interface.
 
 ---
 
@@ -15,17 +15,38 @@ Standard LLMs can only answer based on data they were trained on and may halluci
 ## 🔄 How RAG Works (The Workflow)
 
 ```mermaid
-flowchart LR
-    A[1. User Query] --> B[2. Retrieval: Hybrid Search]
-    B --> C[3. Augmentation: Context Injection]
-    C --> D[4. Generation: LLM Synthesizes Answer]
+flowchart TD
+    subgraph Ingestion["1. Document Ingestion & Indexing"]
+        Docs[Raw Documents: PDF, Word, Excel, Markdown] --> Parser[Document Parser]
+        Parser --> Chunker[Chunker & Text Splitting]
+        Chunker --> VectorStore[(ChromaDB Vector Store)]
+        Chunker --> LexicalStore[(BM25 Lexical Index)]
+    end
+
+    subgraph UserQuery["2. Query Processing & Hybrid Search"]
+        User[User Question] --> GuardIn[Input Security Guardrail]
+        GuardIn -- Safe --> Search[Hybrid Search: Dense + BM25]
+        Search --> RRF[Reciprocal Rank Fusion]
+    end
+
+    subgraph Synthesis["3. Augmentation & Generation"]
+        RRF --> Context[Enriched Prompt Context]
+        Context --> LLMChain[Multi-Provider LLM Fallback Engine]
+        LLMChain --> Validator[Groundedness & Validation]
+    end
+
+    subgraph SecurityOutput["4. Safety & Response Rendering"]
+        Validator --> GuardOut[Output Guardrail: PII Redaction]
+        GuardOut --> Output[Final Answer with Citations & UI Badges]
+    end
 ```
 
-1. **Ingestion & Chunking**: External files (PDFs, Word, Excel, Markdown) are ingested and broken into smaller chunks.
-2. **Indexing**: Chunks are stored in ChromaDB as vector embeddings and indexed with BM25 keyword search.
-3. **Retrieval**: When a user submits a question, the system searches the knowledge base for the most relevant document chunks.
-4. **Augmentation**: The retrieved chunks are added into the prompt context alongside the user's question.
-5. **Generation & Safety**: The LLM synthesizes an accurate answer based strictly on the retrieved context while security guardrails mask PII and verify factual grounding.
+### Detailed Workflow Steps
+
+1. **Ingestion & Indexing**: External documents (PDF, DOCX, XLSX, Markdown) are parsed, divided into chunks, and stored as vector embeddings in ChromaDB and keyword indexes in BM25.
+2. **Input Security & Hybrid Retrieval**: User queries pass through input security screening. Safe queries trigger a hybrid search combining dense semantic vectors and sparse BM25 keywords, fused using Reciprocal Rank Fusion (RRF).
+3. **Augmentation & Generation**: The highest-ranked evidence chunks enrich the prompt context. The system calls the multi-provider LLM engine (Gemini, OpenAI, Groq, DashScope, or Local Mock) to generate an answer.
+4. **Output Safety & Citation**: Output guardrails mask sensitive PII (emails, phone numbers) before rendering the verified response alongside source document citations.
 
 ---
 
@@ -51,21 +72,4 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open your web browser and go to: **`http://localhost:8000`**
-
----
-
-## 📜 MIT License & What It Means
-
-This project is licensed under the **[MIT License](LICENSE)**.
-
-### What is the MIT License?
-The **MIT License** is a short, simple, and permissive open-source license created by the Massachusetts Institute of Technology (MIT).
-
-### What does "MIT Licensed" mean?
-When a project is licensed under MIT, it gives anyone full freedom to use the code for almost any purpose.
-
-- **Free Commercial & Private Use**: You can use, modify, distribute, and sell this software in personal, academic, or commercial projects.
-- **Freedom to Modify**: You can rewrite, modify, or integrate this code into your own applications without paying royalties or seeking permission.
-- **No Guarantee (As-Is)**: The software is provided "as is" without warranty, meaning the original creators are not liable for any issues or damages.
-- **Only One Condition**: You must retain the original copyright notice and license permission text if you redistribute the code.
+Open your web browser and navigate to: **`http://localhost:8000`**
