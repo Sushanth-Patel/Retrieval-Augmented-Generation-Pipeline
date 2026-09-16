@@ -2,6 +2,8 @@
 
 A simple, production-ready system that lets you upload your own documents (PDFs, Word files, spreadsheets, web pages) and ask questions about them to get accurate, grounded AI answers backed by real citations.
 
+🌐 **Live Deployment**: [https://retrieval-augmented-generation-pipeline.onrender.com](https://retrieval-augmented-generation-pipeline.onrender.com)
+
 ---
 
 ## 📌 What is RAG?
@@ -50,7 +52,10 @@ flowchart TD
 
 ---
 
-## 🚀 Quick Start
+### 🌐 Live Web Application
+
+Access the live production web app on Render:  
+👉 **[https://retrieval-augmented-generation-pipeline.onrender.com](https://retrieval-augmented-generation-pipeline.onrender.com)**
 
 ### 1. Installation
 
