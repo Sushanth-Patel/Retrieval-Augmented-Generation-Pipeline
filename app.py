@@ -447,6 +447,10 @@ def upload_document(
 # -----------------------------------------------------------------------------
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
+    if Path("static/css").exists():
+        app.mount("/css", StaticFiles(directory="static/css"), name="css")
+    if Path("static/js").exists():
+        app.mount("/js", StaticFiles(directory="static/js"), name="js")
 
 
 if __name__ == "__main__":
