@@ -31,20 +31,29 @@ class VectorStore:
         self.persist_dir = persist_dir
         self.collection_name = collection_name
         self.bm25: Optional[BM25Index] = None
+        self.client: Optional[Any] = None
+        self._collection: Optional[Any] = None
 
-        if persist_dir:
-            Path(persist_dir).mkdir(parents=True, exist_ok=True)
-            self.client = chromadb.PersistentClient(path=persist_dir)
-        else:
-            self.client = chromadb.Client()
+    @property
+    def collection(self):
+        """Lazy-loaded ChromaDB collection to ensure fast container startup within 512MB RAM."""
+        if self._collection is None:
+            if self.persist_dir:
+                Path(self.persist_dir).mkdir(parents=True, exist_ok=True)
+                self.client = chromadb.PersistentClient(
+                    path=self.persist_dir,
+                    settings=Settings(anonymized_telemetry=False)
+                )
+            else:
+                self.client = chromadb.Client(settings=Settings(anonymized_telemetry=False))
 
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
-
-        if self.count() > 0:
-            self._init_bm25_from_collection()
+            self._collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+            if self.bm25 is None and self._collection.count() > 0:
+                self._init_bm25_from_collection()
+        return self._collection
 
     def _init_bm25_from_collection(self):
         """Builds in-memory BM25 index from persistent ChromaDB collection."""
@@ -69,7 +78,18 @@ class VectorStore:
         self.bm25 = BM25Index(chunks)
 
     def count(self) -> int:
-        """Returns the number of documents in the collection."""
+        """Returns the number of documents in the collection without forcing heavy ONNX model loading at startup."""
+        if self._collection is None:
+            if self.persist_dir and Path(self.persist_dir).exists():
+                try:
+                    c = chromadb.PersistentClient(path=self.persist_dir, settings=Settings(anonymized_telemetry=False))
+                    cols = [col.name for col in c.list_collections()]
+                    if self.collection_name not in cols:
+                        return 0
+                except Exception:
+                    return 0
+            else:
+                return 0
         return self.collection.count()
 
     def clear(self):
