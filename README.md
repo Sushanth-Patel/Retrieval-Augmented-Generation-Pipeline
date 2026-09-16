@@ -55,8 +55,8 @@ flowchart TD
 ### 1. Installation
 
 ```bash
-git clone https://github.com/Sushanth-Patel/agentic-rag-pipeline.git
-cd agentic-rag-pipeline
+git clone https://github.com/Sushanth-Patel/Retrieval-Augmented-Generation-Pipeline.git
+cd Retrieval-Augmented-Generation-Pipeline
 
 # Create virtual environment
 python -m venv .venv
