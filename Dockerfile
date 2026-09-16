@@ -70,7 +70,11 @@ ENV PORT=8080 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/appuser \
-    XDG_CACHE_HOME=/home/appuser/.cache
+    XDG_CACHE_HOME=/home/appuser/.cache \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1
 
 EXPOSE ${PORT}
 

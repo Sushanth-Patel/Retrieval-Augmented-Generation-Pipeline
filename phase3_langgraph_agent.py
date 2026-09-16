@@ -71,8 +71,14 @@ class AgentState(TypedDict):
 class LangGraphAgent:
     """Production state machine agent with session memory and loop-back routing."""
 
-    def __init__(self, db_dir: str = ".chroma_db", force_mock: bool = False, rate_limiter: Optional[Any] = None):
-        self.vector_store = VectorStore(persist_dir=db_dir, collection_name="phoenix_knowledge_base")
+    def __init__(
+        self,
+        db_dir: str = ".chroma_db",
+        force_mock: bool = False,
+        rate_limiter: Optional[Any] = None,
+        vector_store: Optional[VectorStore] = None
+    ):
+        self.vector_store = vector_store if vector_store is not None else VectorStore(persist_dir=db_dir, collection_name="phoenix_knowledge_base")
         self.memory = MemoryStore()
         self.llm = LLMClient(force_mock=force_mock, rate_limiter=rate_limiter)
         self.web_search = WebSearchEngine(force_mock=force_mock)

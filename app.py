@@ -46,6 +46,7 @@ from core.llm_client import (
 )
 from core.chunker import NaiveChunker, SemanticChunker
 from core.document_parser import DocumentParser
+from core.vector_store import VectorStore
 from phase3_langgraph_agent import LangGraphAgent
 
 # Configure structured logging
@@ -63,17 +64,34 @@ auth_manager = AuthManager()
 output_guardrail = OutputGuardrail()
 confirmation_gate = ConfirmationGate()
 
+# Memory-optimized VectorStore singleton (prevents duplicate ChromaDB memory allocations)
+shared_vector_store = VectorStore(persist_dir=".chroma_db", collection_name="phoenix_knowledge_base")
+
 # Environment flag for offline mock vs live model
 force_mock_default = os.getenv("FORCE_MOCK", "false").lower() in ("true", "1", "yes")
 shared_rate_limiter = RateLimiter()
 
-# Two agent instances: live (guarded by rate limiter) and mock (offline deterministic)
-live_agent = LangGraphAgent(force_mock=False, rate_limiter=shared_rate_limiter)
-mock_agent = LangGraphAgent(force_mock=True)
+# Primary live agent instance (reuses shared vector store)
+live_agent = LangGraphAgent(force_mock=False, rate_limiter=shared_rate_limiter, vector_store=shared_vector_store)
 
-# Guardrails: live (calls Groq semantic check) and mock (offline LocalMockLLM)
+_lazy_mock_agent = None
+
+def get_mock_agent() -> LangGraphAgent:
+    global _lazy_mock_agent
+    if _lazy_mock_agent is None:
+        _lazy_mock_agent = LangGraphAgent(force_mock=True, vector_store=shared_vector_store)
+    return _lazy_mock_agent
+
+# Guardrails: live (calls Groq semantic check) and lazy mock (offline LocalMockLLM)
 live_input_guardrail = InputGuardrail(enable_semantic_check=True, llm_client=live_agent.llm)
-mock_input_guardrail = InputGuardrail(enable_semantic_check=True, llm_client=mock_agent.llm)
+_lazy_mock_guardrail = None
+
+def get_mock_guardrail() -> InputGuardrail:
+    global _lazy_mock_guardrail
+    if _lazy_mock_guardrail is None:
+        mock_a = get_mock_agent()
+        _lazy_mock_guardrail = InputGuardrail(enable_semantic_check=True, llm_client=mock_a.llm)
+    return _lazy_mock_guardrail
 
 
 # -----------------------------------------------------------------------------
@@ -282,8 +300,8 @@ def query_agent(
     """
     # 1. Select Execution Engine & Guardrail (live by default)
     is_mock = mock or force_mock_default
-    active_agent = mock_agent if is_mock else live_agent
-    active_guardrail = mock_input_guardrail if is_mock else live_input_guardrail
+    active_agent = get_mock_agent() if is_mock else live_agent
+    active_guardrail = get_mock_guardrail() if is_mock else live_input_guardrail
 
     # 2. Pre-execution Security Check: Input Guardrail
     guard_result = active_guardrail.validate_query(req.query)
@@ -309,7 +327,7 @@ def query_agent(
         )
     except (RateLimitExceeded, LLMServiceUnavailableError, LLMAuthenticationError, LLMMalformedResponseError, Exception) as exc:
         logger.info("Live API execution failed (%s); fulfilling query via fallback engine for user '%s'", exc, user.user_id)
-        result = mock_agent.run(
+        result = get_mock_agent().run(
             query=req.query,
             conversation_history=req.conversation_history,
             user=user,
@@ -363,8 +381,7 @@ def reindex_knowledge_base(user: AuthenticatedUser = Depends(get_current_user)):
     with _reindex_lock:
         chunker = NaiveChunker(chunk_size=500, overlap=50)
         chunks = chunker.chunk_directory(docs_path, glob_pattern=None)
-        live_agent.vector_store.add_chunks(chunks)
-        mock_agent.vector_store._init_bm25_from_collection()
+        shared_vector_store.add_chunks(chunks)
 
     return ReindexResponse(
         status="success",
@@ -442,8 +459,7 @@ def upload_document(
         with _reindex_lock:
             chunker = SemanticChunker(target_chunk_size=500, max_chunk_size=800, overlap=50)
             chunks = chunker.chunk_directory(Path("data/sample_docs"), glob_pattern=None)
-            live_agent.vector_store.add_chunks(chunks)
-            mock_agent.vector_store._init_bm25_from_collection()
+            shared_vector_store.add_chunks(chunks)
             chunks_indexed = len(chunks)
         logger.info("Reindex triggered after upload: %d chunks indexed", chunks_indexed)
 
