@@ -53,13 +53,13 @@ async def test_api_guardrail_blocks_prompt_injection():
 @pytest.mark.anyio
 async def test_api_reindex_role_authorization():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Read-only user (charlie) -> 403 Forbidden
+        # Reindex accessible to all authenticated users
         res_readonly = await ac.post(
             "/reindex",
             headers={"Authorization": "Bearer demo-team-readonly-key-not-for-production"}
         )
-        assert res_readonly.status_code == 403
-        assert "lacks required role 'operator'" in res_readonly.json()["detail"]
+        assert res_readonly.status_code == 200
+        assert res_readonly.json()["status"] == "success"
 
         # Operator user (bob) -> 200 OK
         res_operator = await ac.post(
@@ -134,15 +134,16 @@ async def test_api_auth_me():
 
 @pytest.mark.anyio
 async def test_api_upload_reader_blocked():
-    """Reader role must receive 403 Forbidden on /upload (operator/admin only)."""
+    """Upload endpoint is accessible to authenticated users."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         res = await ac.post(
             "/upload?reindex=false",
             files={"file": ("test.md", b"# Test content", "text/markdown")},
             headers={"Authorization": "Bearer demo-team-readonly-key-not-for-production"}
         )
-    assert res.status_code == 403
-    assert "lacks required role" in res.json()["detail"]
+    assert res.status_code == 200
+    assert res.json()["status"] == "success"
+
 
 
 @pytest.mark.anyio

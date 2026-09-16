@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger("document_parser")
 
 
 class DocumentParser:
-    """Stateless converter: file path → plain-text string."""
+    """Stateless converter: file path or Google Sheets URL → plain-text string."""
 
     SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xls", ".md", ".txt", ".json"}
 
@@ -62,27 +63,70 @@ class DocumentParser:
             logger.error("Failed to parse '%s': %s", path.name, exc)
             raise
 
+    @classmethod
+    def parse_google_sheets_url(cls, url: str) -> str:
+        """Extract tabular content from a public Google Sheets URL by fetching CSV export."""
+        import urllib.request
+        import csv
+        import io
+
+        match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url)
+        if not match:
+            raise ValueError("Invalid Google Sheets URL format. Expected 'https://docs.google.com/spreadsheets/d/<DOC_ID>/...'")
+
+        doc_id = match.group(1)
+        csv_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv"
+
+        try:
+            req = urllib.request.Request(csv_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                csv_raw = resp.read().decode("utf-8", errors="replace")
+
+            reader = csv.reader(io.StringIO(csv_raw))
+            rows = []
+            for row in reader:
+                line = "\t".join(row).strip()
+                if line:
+                    rows.append(line)
+
+            if not rows:
+                return f"[Google Sheet: {doc_id}] Empty sheet content."
+
+            return f"[Google Sheet: {doc_id}]\n" + "\n".join(rows)
+        except Exception as e:
+            logger.error("Failed to fetch Google Sheet '%s': %s", url, e)
+            raise ValueError(f"Failed to fetch public Google Sheet content: {e}") from e
+
     # ------------------------------------------------------------------
     # Format-specific parsers
     # ------------------------------------------------------------------
 
     @staticmethod
     def _parse_pdf(path: Path) -> str:
-        """Extract text from a PDF using pdfplumber.
-
-        Notes:
-            - Works only on PDFs with a text layer (digitally created).
-            - Scanned / image-only PDFs produce an empty string; this is
-              documented as a known limitation — OCR is out of scope.
-        """
-        import pdfplumber  # lazy import — only needed for PDF files
-
+        """Extract text from a PDF using pdfplumber with pypdf fallback."""
         pages: list[str] = []
-        with pdfplumber.open(path) as pdf:
-            for i, page in enumerate(pdf.pages, 1):
-                text = page.extract_text() or ""
-                if text.strip():
-                    pages.append(f"[Page {i}]\n{text}")
+
+        try:
+            import pdfplumber
+            with pdfplumber.open(path) as pdf:
+                for i, page in enumerate(pdf.pages, 1):
+                    text = page.extract_text() or ""
+                    if text.strip():
+                        pages.append(f"[Page {i}]\n{text}")
+        except Exception as exc:
+            logger.debug("pdfplumber failed for '%s': %s", path.name, exc)
+
+        # Fallback to pypdf if pdfplumber returns empty pages
+        if not pages:
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(path)
+                for i, page in enumerate(reader.pages, 1):
+                    text = page.extract_text() or ""
+                    if text.strip():
+                        pages.append(f"[Page {i}]\n{text}")
+            except Exception as exc:
+                logger.debug("pypdf fallback failed for '%s': %s", path.name, exc)
 
         if not pages:
             logger.warning(

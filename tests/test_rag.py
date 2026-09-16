@@ -285,6 +285,10 @@ def test_llm_client_auth_error_fail_fast():
     import pytest
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("GEMINI_API_KEY", raising=False)
+        mp.delenv("OPENAI_API_KEY", raising=False)
+        mp.delenv("OPENROUTER_API_KEY", raising=False)
+        mp.delenv("DASHSCOPE_API_KEY", raising=False)
         mp.setenv("GROQ_API_KEY", "gsk_test_fixture_key")
         client = LLMClient()
         mp.setattr(client.openai_client, "api_key", "gsk_invalid_key_123")
@@ -302,6 +306,10 @@ def test_llm_client_malformed_response():
         choices = []
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("GEMINI_API_KEY", raising=False)
+        mp.delenv("OPENAI_API_KEY", raising=False)
+        mp.delenv("OPENROUTER_API_KEY", raising=False)
+        mp.delenv("DASHSCOPE_API_KEY", raising=False)
         mp.setenv("GROQ_API_KEY", "gsk_test_fixture_key")
         client = LLMClient()
         mp.setattr(client.openai_client.chat.completions, "create", lambda **kwargs: EmptyResponse())
@@ -511,3 +519,30 @@ def test_unauthenticated_and_malformed_memory_routing():
             store_a.storage_path.unlink()
         if traversal_store and traversal_store.storage_path.exists():
             traversal_store.storage_path.unlink()
+
+
+def test_web_search_and_hybrid_agent_execution():
+    """Verifies WebSearchEngine execution and LangGraph hybrid RAG + Internet search routing."""
+    from core.web_search import WebSearchEngine
+    from phase3_langgraph_agent import LangGraphAgent
+
+    # 1. Test WebSearchEngine detection heuristics
+    assert WebSearchEngine.should_search_web("What is the latest release of Python 3.13?", search_mode="auto")
+    assert WebSearchEngine.should_search_web("Any query", search_mode="web")
+    assert WebSearchEngine.should_search_web("Any query", search_mode="hybrid")
+    assert not WebSearchEngine.should_search_web("Any query", search_mode="internal")
+
+    # 2. Test mock web search execution
+    web_engine = WebSearchEngine(force_mock=True)
+    results = web_engine.search("Python 3.13 features", max_results=2)
+    assert len(results) > 0
+    assert "url" in results[0]
+    assert "domain" in results[0]
+
+    # 3. Test LangGraph hybrid execution
+    agent = LangGraphAgent(force_mock=True)
+    res = agent.run("What are the features in Python 3.13?", search_mode="web")
+    assert res["validation"]["is_grounded"] is True
+    assert "sources" in res
+    assert len(res["sources"].get("web", [])) > 0
+

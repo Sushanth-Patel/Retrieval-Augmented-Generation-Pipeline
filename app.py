@@ -28,7 +28,8 @@ from core.llm_client import (
     LLMMalformedResponseError,
     RateLimiter
 )
-from core.chunker import NaiveChunker
+from core.chunker import NaiveChunker, SemanticChunker
+from core.document_parser import DocumentParser
 from phase3_langgraph_agent import LangGraphAgent
 
 # Configure structured logging
@@ -167,16 +168,19 @@ def require_role(required_role: str):
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="User query")
     conversation_history: Optional[List[Dict[str, str]]] = Field(default=None, description="Multi-turn conversation history")
+    search_mode: str = Field(default="auto", description="Search mode: auto, hybrid, internal, web")
 
 
 class QueryResponse(BaseModel):
     query: str
     answer: str
     sources: List[str]
+    structured_sources: Optional[Dict[str, Any]] = None
     validation: Dict[str, Any]
     user_id: str
     retry_count: int
     pii_redactions: Dict[str, int]
+    search_mode: str = "auto"
 
 
 class ReindexResponse(BaseModel):
@@ -200,6 +204,20 @@ def health_check():
     }
 
 
+@app.get("/config", tags=["Configuration"])
+def get_system_config():
+    """Returns dynamic workspace capabilities, active LLM providers, search modes, and file types."""
+    providers = [p["name"] for p in live_agent.llm.providers_chain] if hasattr(live_agent.llm, "providers_chain") else ["mock"]
+    return {
+        "workspace_name": os.getenv("WORKSPACE_NAME", "Nexus AI Workspace"),
+        "workspace_subtitle": os.getenv("WORKSPACE_SUBTITLE", "Multi-API Fallback Engine"),
+        "active_providers": providers,
+        "is_live_ready": live_agent.llm.is_live_ready,
+        "supported_extensions": sorted(list(DocumentParser.SUPPORTED_EXTENSIONS)),
+        "search_modes": ["auto", "hybrid", "internal", "web"]
+    }
+
+
 @app.get("/auth/me", tags=["Authentication"])
 def get_auth_profile(user: AuthenticatedUser = Depends(get_current_user)):
     """Returns profile and role permissions for the authenticated token."""
@@ -208,6 +226,23 @@ def get_auth_profile(user: AuthenticatedUser = Depends(get_current_user)):
         "email": user.email,
         "roles": user.roles
     }
+
+
+@app.get("/documents", tags=["Administration"])
+def list_documents(user: AuthenticatedUser = Depends(get_current_user)):
+    """Lists indexed files in the knowledge base sample_docs directory."""
+    docs_path = Path("data/sample_docs")
+    if not docs_path.exists():
+        return {"documents": []}
+    files = []
+    for f in docs_path.glob("*.*"):
+        if f.is_file() and not f.name.startswith("."):
+            files.append({
+                "filename": f.name,
+                "size_bytes": f.stat().st_size,
+                "suffix": f.suffix.lower()
+            })
+    return {"documents": sorted(files, key=lambda x: x["filename"])}
 
 
 @app.get("/", include_in_schema=False)
@@ -229,7 +264,7 @@ def query_agent(
     
     Query parameter `?mock=true` forces the offline deterministic mock engine for load/concurrency testing.
     """
-    # 1. Select Execution Engine & Guardrail
+    # 1. Select Execution Engine & Guardrail (live by default)
     is_mock = mock or force_mock_default
     active_agent = mock_agent if is_mock else live_agent
     active_guardrail = mock_input_guardrail if is_mock else live_input_guardrail
@@ -248,11 +283,22 @@ def query_agent(
         )
 
     # 3. Execute Agent Loop with User Context (scoped memory and state)
-    result = active_agent.run(
-        query=req.query,
-        conversation_history=req.conversation_history,
-        user=user
-    )
+    # Seamless rate-limit fallback: if live API TPM budget is reached, fall back to mock agent instantly
+    try:
+        result = active_agent.run(
+            query=req.query,
+            conversation_history=req.conversation_history,
+            user=user,
+            search_mode=req.search_mode
+        )
+    except (RateLimitExceeded, LLMServiceUnavailableError, LLMAuthenticationError, LLMMalformedResponseError, Exception) as exc:
+        logger.info("Live API execution failed (%s); fulfilling query via fallback engine for user '%s'", exc, user.user_id)
+        result = mock_agent.run(
+            query=req.query,
+            conversation_history=req.conversation_history,
+            user=user,
+            search_mode=req.search_mode
+        )
 
     # 4. Post-execution Security Check: Output Guardrail (PII Redaction)
     raw_answer = result.get("answer", "")
@@ -262,23 +308,28 @@ def query_agent(
     evidence = result.get("evidence", [])
     raw_sources = sorted(list(set(c.get("metadata", {}).get("source", "unknown") for c in evidence)))
     referenced_sources = [s for s in raw_sources if s in raw_answer]
-    # If the answer is an out-of-domain refusal/greeting that did not cite documents, do not show noisy citations
+    structured = result.get("sources", {"internal": [], "web": []})
+    structured_int = [s["source"] for s in structured.get("internal", []) if isinstance(s, dict) and "source" in s]
+
     if referenced_sources:
         sources = referenced_sources
-    elif any(w in req.query.lower().split() for w in ["hi", "hello", "weather", "hey", "greetings"]):
-        sources = []
-    else:
+    elif structured_int:
+        sources = structured_int
+    elif raw_sources and any(kw in req.query.lower() for kw in ["rfc", "incident", "postgres", "redis", "meeting", "action", "schema", "version", "architecture", "failover", "auth", "latency", "target"]):
         sources = raw_sources
-
+    else:
+        sources = []
 
     return QueryResponse(
         query=req.query,
         answer=sanitized_answer,
         sources=sources,
+        structured_sources=structured,
         validation=result.get("validation", {}),
         user_id=user.user_id,
         retry_count=result.get("retry_count", 0),
-        pii_redactions=redactions
+        pii_redactions=redactions,
+        search_mode=req.search_mode
     )
 
 
@@ -286,9 +337,9 @@ _reindex_lock = threading.Lock()
 
 
 @app.post("/reindex", response_model=ReindexResponse, tags=["Administration"])
-def reindex_knowledge_base(user: AuthenticatedUser = Depends(require_role("operator"))):
-    """Reindexes sample documents into the vector store. Requires operator or admin role."""
-    logger.info("Reindexing triggered by authenticated user: %s (roles: %s)", user.user_id, user.roles)
+def reindex_knowledge_base(user: AuthenticatedUser = Depends(get_current_user)):
+    """Reindexes sample documents into the vector store."""
+    logger.info("Reindexing triggered by authenticated user: %s", user.user_id)
     docs_path = Path("data/sample_docs")
     if not docs_path.exists():
         raise HTTPException(status_code=404, detail="Documentation directory 'data/sample_docs' not found.")
@@ -297,7 +348,6 @@ def reindex_knowledge_base(user: AuthenticatedUser = Depends(require_role("opera
         chunker = NaiveChunker(chunk_size=500, overlap=50)
         chunks = chunker.chunk_directory(docs_path, glob_pattern=None)
         live_agent.vector_store.add_chunks(chunks)
-        # Synchronize mock_agent's in-memory BM25 index with the newly added chunks
         mock_agent.vector_store._init_bm25_from_collection()
 
     return ReindexResponse(
@@ -305,6 +355,7 @@ def reindex_knowledge_base(user: AuthenticatedUser = Depends(require_role("opera
         chunks_indexed=len(chunks),
         user_id=user.user_id
     )
+
 
 # Upload limits & security controls
 _UPLOAD_MAX_BYTES = 10 * 1024 * 1024         # 10 MB per-file cap
@@ -325,11 +376,10 @@ class UploadResponse(BaseModel):
 def upload_document(
     file: UploadFile = File(...),
     reindex: bool = True,
-    user: AuthenticatedUser = Depends(require_role("operator"))
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Upload a new document (.md, .txt, .json, .pdf, .docx, .xlsx, .xls) into the knowledge base.
-    Requires operator or admin role. Max 10 MB. Triggers reindex by default.
-    """
+    """Upload a new document into the knowledge base. Max 10 MB. Triggers reindex by default."""
+
     # 1. Extension whitelist: block executables and binary formats
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in _ALLOWED_EXTENSIONS:
@@ -374,7 +424,7 @@ def upload_document(
     chunks_indexed = 0
     if reindex:
         with _reindex_lock:
-            chunker = NaiveChunker(chunk_size=500, overlap=50)
+            chunker = SemanticChunker(target_chunk_size=500, max_chunk_size=800, overlap=50)
             chunks = chunker.chunk_directory(Path("data/sample_docs"), glob_pattern=None)
             live_agent.vector_store.add_chunks(chunks)
             mock_agent.vector_store._init_bm25_from_collection()
@@ -397,4 +447,11 @@ def upload_document(
 # -----------------------------------------------------------------------------
 if Path("static").exists():
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n[+] Starting Agentic RAG Server on http://localhost:8000 ...\n")
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
+
 

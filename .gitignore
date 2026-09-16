@@ -33,3 +33,5 @@ test_semantic_classifier_prompt.py
 run_2_concurrent.py
 ui_*.png
 data/users/
+scratch/
+data/sample_docs/test.md

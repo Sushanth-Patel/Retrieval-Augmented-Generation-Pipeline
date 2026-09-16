@@ -1,11 +1,12 @@
 """Document chunker for Naive & Agentic RAG.
 
-Provides naive fixed-size chunking with configurable window size and overlap,
+Provides naive fixed-size chunking and structure-aware semantic chunking
 preserving metadata (source file, chunk index, start/end character offsets).
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
+import re
 from pydantic import BaseModel, Field
 
 
@@ -80,9 +81,7 @@ class NaiveChunker:
         return self.chunk_text(text, doc_name=file_path.name, extra_metadata={"file_path": str(file_path)})
 
     def chunk_directory(self, dir_path: Path, glob_pattern: str = None) -> List[DocumentChunk]:
-        """Chunks all matching documents in a directory.
-        If glob_pattern is None, chunks all files with extensions supported by DocumentParser.
-        """
+        """Chunks all matching documents in a directory."""
         all_chunks: List[DocumentChunk] = []
         if glob_pattern is not None:
             files = sorted(dir_path.glob(glob_pattern))
@@ -96,3 +95,78 @@ class NaiveChunker:
         for f in files:
             all_chunks.extend(self.chunk_file(f))
         return all_chunks
+
+
+class SemanticChunker(NaiveChunker):
+    """Structure-aware semantic chunker that splits on headers, code blocks, and double line-breaks."""
+
+    def __init__(self, target_chunk_size: int = 500, max_chunk_size: int = 800, overlap: int = 50):
+        super().__init__(chunk_size=target_chunk_size, overlap=overlap)
+        self.max_chunk_size = max_chunk_size
+
+    def chunk_text(self, text: str, doc_name: str, extra_metadata: Dict[str, Any] = None) -> List[DocumentChunk]:
+        """Semantic splitting based on headers (#), code blocks (```), and paragraph breaks (\n\n)."""
+        if not text.strip():
+            return []
+
+        # Split into logical semantic blocks
+        sections = re.split(r'(\n#{1,4}\s+[^\n]+\n|\n```[\s\S]*?```\n|\n\n+)', text)
+        
+        current_chunk = ""
+        current_start = 0
+        chunks: List[DocumentChunk] = []
+        chunk_idx = 0
+
+        for section in sections:
+            if not section:
+                continue
+
+            if len(current_chunk) + len(section) <= self.max_chunk_size:
+                current_chunk += section
+            else:
+                if current_chunk.strip():
+                    chunk_id = f"{Path(doc_name).stem}_sem_{chunk_idx:03d}"
+                    meta = {
+                        "source": doc_name,
+                        "chunk_index": chunk_idx,
+                        "chunk_type": "semantic",
+                        "length": len(current_chunk),
+                        **(extra_metadata or {})
+                    }
+                    chunks.append(
+                        DocumentChunk(
+                            chunk_id=chunk_id,
+                            doc_name=doc_name,
+                            chunk_index=chunk_idx,
+                            content=current_chunk.strip(),
+                            start_char=current_start,
+                            end_char=current_start + len(current_chunk),
+                            metadata=meta
+                        )
+                    )
+                    chunk_idx += 1
+                    current_start += len(current_chunk)
+                current_chunk = section
+
+        if current_chunk.strip():
+            chunk_id = f"{Path(doc_name).stem}_sem_{chunk_idx:03d}"
+            meta = {
+                "source": doc_name,
+                "chunk_index": chunk_idx,
+                "chunk_type": "semantic",
+                "length": len(current_chunk),
+                **(extra_metadata or {})
+            }
+            chunks.append(
+                DocumentChunk(
+                    chunk_id=chunk_id,
+                    doc_name=doc_name,
+                    chunk_index=chunk_idx,
+                    content=current_chunk.strip(),
+                    start_char=current_start,
+                    end_char=current_start + len(current_chunk),
+                    metadata=meta
+                )
+            )
+
+        return chunks if chunks else super().chunk_text(text, doc_name, extra_metadata)
