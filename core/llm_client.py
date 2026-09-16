@@ -408,15 +408,31 @@ class LocalMockLLM:
 
             scored_lines.append((score, clean_content))
 
+        # Java & General Programming requests
+        if any(k in ql for k in ["java", "hello world", "java program", "java code"]):
+            return (
+                "Here is a classic **Hello, World!** program in Java:\n\n"
+                "```java\n"
+                "public class HelloWorld {\n"
+                "    public static void main(String[] args) {\n"
+                "        System.out.println(\"Hello, World!\");\n"
+                "    }\n"
+                "}\n"
+                "```\n\n"
+                "### How to Compile & Run:\n"
+                "1. **Compile**: `javac HelloWorld.java`\n"
+                "2. **Run**: `java HelloWorld`\n"
+            )
+
         # Select highest-scoring factual statements
         scored_lines.sort(key=lambda x: x[0], reverse=True)
         top_candidates = [s[1] for s in scored_lines if s[0] > 0][:16]
 
         if not top_candidates:
-            top_candidates = [s[1] for s in scored_lines if len(s[1]) > 20][:8]
-
-        if not top_candidates:
-            return f"Here is the information regarding **{query}**:\n\n- Overview and key details for '{query}'.\n- Synthesized from available web search and knowledge sources."
+            return (
+                f"No internal documentation in the knowledge base specifically mentions **'{query}'**.\n\n"
+                f"You can switch search mode to **'web'** or **'auto'** to retrieve live results for general queries."
+            )
 
         summary_bullets = "\n".join(f"- {item}" for item in top_candidates)
         return (
