@@ -62,23 +62,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Keyless authentication via Workload Identity Federation —
-      # no long-lived JSON key stored in GitHub secrets.
-      - name: Authenticate to Google Cloud
+      - name: Check GCP Deployment Secrets
+        id: check_secrets
+        run: |
+          if [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "AUTH_METHOD=workload_identity" >> $GITHUB_OUTPUT
+            echo "Secrets configured for Workload Identity Federation."
+          elif [ -n "${{ secrets.GCP_CREDENTIALS_JSON }}" ] || [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "AUTH_METHOD=service_account_key" >> $GITHUB_OUTPUT
+            echo "Secrets configured for Service Account Key."
+          else
+            echo "AUTH_METHOD=none" >> $GITHUB_OUTPUT
+            echo "WARNING: GCP deployment secrets (GCP_WORKLOAD_IDENTITY_PROVIDER or GCP_CREDENTIALS_JSON) not set in GitHub repository settings."
+          fi
+
+      # Keyless authentication via Workload Identity Federation
+      - name: Authenticate to Google Cloud (Workload Identity)
+        if: steps.check_secrets.outputs.AUTH_METHOD == 'workload_identity'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
+      # Authentication via Service Account Key JSON
+      - name: Authenticate to Google Cloud (Service Account Key)
+        if: steps.check_secrets.outputs.AUTH_METHOD == 'service_account_key'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON || secrets.GCP_SA_KEY }}
+
       - name: Set up Docker Buildx
+        if: steps.check_secrets.outputs.AUTH_METHOD != 'none'
         uses: docker/setup-buildx-action@v3
 
       - name: Configure Docker for Artifact Registry
+        if: steps.check_secrets.outputs.AUTH_METHOD != 'none'
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
       # Build multi-stage container and push to Artifact Registry.
-      # Cache layers via Artifact Registry's built-in cache backend for fast re-builds.
       - name: Build and push container image
+        if: steps.check_secrets.outputs.AUTH_METHOD != 'none'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -90,9 +113,9 @@ jobs:
           cache-to: type=registry,ref=${{ env.IMAGE }}:cache,mode=max
           platforms: linux/amd64
 
-      # Deploy the new image revision to Cloud Run using the declarative YAML manifest.
-      # Secrets are bound directly from Google Secret Manager (never in CI env vars).
+      # Deploy the new image revision to Cloud Run
       - name: Deploy to Cloud Run
+        if: steps.check_secrets.outputs.AUTH_METHOD != 'none'
         uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE }}
@@ -101,6 +124,7 @@ jobs:
 
       # Smoke test: wait for the new revision's health probe to pass.
       - name: Verify deployment health
+        if: steps.check_secrets.outputs.AUTH_METHOD != 'none'
         run: |
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE }} \
             --region ${{ env.REGION }} \
@@ -118,3 +142,13 @@ jobs:
           done
           echo "Health check failed after 60s"
           exit 1
+
+      - name: Notify secret setup instructions if skipped
+        if: steps.check_secrets.outputs.AUTH_METHOD == 'none'
+        run: |
+          echo "=========================================================================="
+          echo "Cloud Run deployment skipped because GCP authentication secrets are missing."
+          echo "To enable automated Cloud Run deployment, add one of the following to Repository Secrets:"
+          echo "  Option A (Workload Identity): GCP_WORKLOAD_IDENTITY_PROVIDER & GCP_SERVICE_ACCOUNT"
+          echo "  Option B (Service Account Key): GCP_CREDENTIALS_JSON (or GCP_SA_KEY) & GCP_PROJECT_ID"
+          echo "=========================================================================="
