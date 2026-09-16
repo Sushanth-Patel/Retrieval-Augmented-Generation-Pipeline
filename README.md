@@ -73,3 +73,27 @@ python app.py
 ```
 
 Open your web browser and navigate to: **`http://localhost:8000`**
+
+---
+
+## ✨ Key Features & Capabilities
+
+- **📄 Multi-Format Document Parsing**: Seamlessly ingests PDF, Word (.docx), Excel (.xlsx), Markdown, and plain text files.
+- **🔍 Hybrid Vector & Keyword Search**: Integrates ChromaDB dense embeddings with BM25 keyword search for maximum retrieval accuracy.
+- **🛡️ Built-in Security Guardrails**: Automatically screens prompt injection attacks and redacts sensitive PII (emails, phone numbers).
+- **💻 Modern Web Interface**: Clean, responsive interactive web UI featuring real-time response rendering and document citation badges.
+
+---
+
+## 🤝 Contributing & Feedback
+
+Contributions, suggestions, and feedback are always welcome! If you encounter any issues or have feature ideas:
+1. Open an issue on [GitHub Issues](https://github.com/Sushanth-Patel/Retrieval-Augmented-Generation-Pipeline/issues).
+2. Fork the repository and submit a Pull Request.
+
+---
+
+## 👨‍💻 Author & Acknowledgments
+
+Developed by **[Sushanth Patel](https://github.com/Sushanth-Patel)**.  
+If you find this project helpful, feel free to give it a ⭐️ on GitHub!
