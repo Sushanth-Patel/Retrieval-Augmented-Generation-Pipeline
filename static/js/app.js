@@ -135,8 +135,11 @@
       timeOfDay = 'evening';
     }
 
-    const userName = (state.userProfile && state.userProfile.name) ? state.userProfile.name.split(' ')[0] : 'Workspace';
-    heroGreeting.textContent = `Good ${timeOfDay}, ${userName}`;
+    let name = '';
+    if (state.userProfile && state.userProfile.name && !state.userProfile.name.includes('Alice')) {
+      name = state.userProfile.name.split(' ')[0];
+    }
+    heroGreeting.textContent = name ? `Good ${timeOfDay}, ${name}` : `Good ${timeOfDay}`;
   }
 
   function requestAutomaticPermissions() {
