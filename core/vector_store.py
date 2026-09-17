@@ -70,11 +70,20 @@ class VectorStore:
             use_fast = os.getenv("USE_LIGHTWEIGHT_EMBEDDINGS", "true").lower() in ("true", "1", "yes") or os.getenv("FORCE_MOCK", "false").lower() in ("true", "1", "yes")
             ef = FastLightweightEmbeddingFunction() if use_fast else None
 
-            self._collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                embedding_function=ef,
-                metadata={"hnsw:space": "cosine"}
-            )
+            try:
+                self._collection = self.client.get_or_create_collection(
+                    name=self.collection_name,
+                    embedding_function=ef,
+                    metadata={"hnsw:space": "cosine"}
+                )
+            except ValueError:
+                try:
+                    self._collection = self.client.get_collection(
+                        name=self.collection_name,
+                        embedding_function=ef
+                    )
+                except Exception:
+                    self._collection = self.client.get_collection(name=self.collection_name)
             if self.bm25 is None and self._collection.count() > 0:
                 self._init_bm25_from_collection()
         return self._collection
