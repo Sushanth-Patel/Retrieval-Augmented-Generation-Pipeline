@@ -623,18 +623,6 @@
       });
     }
 
-    // Sidebar search filter
-    const searchInput = document.getElementById('sidebar-search-input');
-    if (searchInput) {
-      searchInput.addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        document.querySelectorAll('.chats-list .chat-item').forEach(item => {
-          const title = item.querySelector('.chat-item-title')?.textContent.toLowerCase() || '';
-          item.style.display = title.includes(query) ? 'flex' : 'none';
-        });
-      });
-    }
-
     // New Chat
     if (DOM.newChatBtn) DOM.newChatBtn.addEventListener('click', createNewSession);
 
