@@ -1,7 +1,7 @@
 /**
- * Agentic RAG + Live Web Search — Frontend Application Engine
- * Supports multi-session management, mode toggling (Auto/Hybrid/Internal/Web),
- * live web citations, guardrail error handling, document uploads, and auth presets.
+ * Agentic RAG Pipeline — Modern Production Frontend Engine
+ * Real features: Multi-session management, Knowledge Base document explorer,
+ * search modes (Auto / Hybrid / Internal / Web), file ingestion, and 24/7 keep-alive.
  */
 
 (function () {
@@ -10,27 +10,23 @@
   // ---------------------------------------------------------------------------
   // Application State
   // ---------------------------------------------------------------------------
-  const STORAGE_KEY = 'agentic_rag_sessions';
+  const STORAGE_KEY = 'agentic_rag_sessions_v2';
   const AUTH_STORAGE_KEY = 'agentic_rag_auth_token';
 
   let state = {
-    searchMode: 'auto',         // 'auto' | 'hybrid' | 'internal' | 'web'
+    searchMode: 'auto', // 'auto' | 'hybrid' | 'internal' | 'web'
     isMock: false,
     authToken: localStorage.getItem(AUTH_STORAGE_KEY) || 'demo-team-admin-key-not-for-production',
-    userProfile: {
-      user_id: 'alice_admin',
-      name: 'Alice (Admin)',
-      role: 'admin'
-    },
     sessions: [],
     activeSessionId: null,
     documents: [],
     pendingUploadFile: null,
-    countdownTimerId: null
+    config: null,
+    heartbeatTimer: null
   };
 
   // ---------------------------------------------------------------------------
-  // DOM Element References
+  // DOM Elements (Safe Resolution)
   // ---------------------------------------------------------------------------
   const DOM = {
     sidebar: document.getElementById('sidebar'),
@@ -38,19 +34,16 @@
     newChatBtn: document.getElementById('new-chat-btn'),
     chatsList: document.getElementById('chats-list'),
     docsCompactList: document.getElementById('docs-compact-list'),
+    docCounter: document.getElementById('doc-counter'),
     sidebarUploadBtn: document.getElementById('sidebar-upload-btn'),
-    userProfileTrigger: document.getElementById('user-profile-trigger'),
-    userAvatarInitials: document.getElementById('user-avatar-initials'),
-    userDisplayName: document.getElementById('user-display-name'),
-    userRoleTag: document.getElementById('user-role-tag'),
+    reindexBtn: document.getElementById('reindex-button'),
+    reindexBtnText: document.getElementById('reindex-button-text'),
 
     activeChatTitle: document.getElementById('active-chat-title'),
     backendStatusDot: document.getElementById('backend-status-dot'),
     backendStatusText: document.getElementById('backend-status-text'),
-    mockToggle: document.getElementById('mock-toggle'),
+    providerChainText: document.getElementById('provider-chain-text'),
     modeTagDisplay: document.getElementById('mode-tag-display'),
-    reindexBtn: document.getElementById('reindex-button'),
-    reindexBtnText: document.getElementById('reindex-button-text'),
 
     chatViewport: document.getElementById('chat-viewport'),
     welcomeContainer: document.getElementById('welcome-container'),
@@ -58,7 +51,6 @@
 
     rateLimitBanner: document.getElementById('rate-limit-banner'),
     rateLimitMessage: document.getElementById('rate-limit-message'),
-    countdownTimer: document.getElementById('countdown-timer'),
     guardrailBanner: document.getElementById('guardrail-alert-banner'),
     guardrailReason: document.getElementById('guardrail-violation-reason'),
     closeGuardrailBtn: document.getElementById('close-guardrail-btn'),
@@ -79,28 +71,7 @@
     uploadFileInput: document.getElementById('upload-file-input'),
     uploadReindexToggle: document.getElementById('upload-reindex-toggle'),
     uploadProgressWrap: document.getElementById('upload-progress-wrap'),
-    uploadProgressBar: document.getElementById('upload-progress-bar'),
-
-    authModal: document.getElementById('auth-modal'),
-    closeAuthModalBtn: document.getElementById('close-auth-modal-btn'),
-    cancelAuthBtn: document.getElementById('cancel-auth-btn'),
-    saveAuthBtn: document.getElementById('save-auth-btn'),
-    customTokenInput: document.getElementById('custom-token-input'),
-    authPresetItems: document.querySelectorAll('.auth-preset-item'),
-
-    // Settings Modal
-    settingsModal: document.getElementById('settings-modal'),
-    openSettingsHdrBtn: document.getElementById('open-settings-hdr-btn'),
-    sidebarSettingsBtn: document.getElementById('sidebar-settings-btn'),
-    closeSettingsModalBtn: document.getElementById('close-settings-modal-btn'),
-    cancelSettingsBtn: document.getElementById('cancel-settings-btn'),
-    saveSettingsBtn: document.getElementById('save-settings-btn'),
-    userDisplayName: document.getElementById('user-display-name'),
-    userDisplaySubtext: document.getElementById('user-display-subtext'),
-
-    // Location Permission Pill
-    locationPermBtn: document.getElementById('location-perm-btn'),
-    locationPermText: document.getElementById('location-perm-text')
+    uploadProgressBar: document.getElementById('upload-progress-bar')
   };
 
   // ---------------------------------------------------------------------------
@@ -111,10 +82,8 @@
     setupEventListeners();
     checkHealth();
     fetchSystemConfig();
-    fetchUserProfile();
     fetchDocuments();
-    requestAutomaticPermissions();
-    updateDynamicGreeting();
+    startClientHeartbeat();
 
     if (state.sessions.length === 0) {
       createNewSession();
@@ -123,41 +92,35 @@
     }
   }
 
-  function updateDynamicGreeting() {
-    const heroGreeting = document.getElementById('hero-greeting');
-    if (!heroGreeting) return;
-
-    if (state.userProfile && state.userProfile.name && !state.userProfile.name.includes('Alice')) {
-      const name = state.userProfile.name.split(' ')[0];
-      heroGreeting.textContent = `Welcome, ${name}. How can I help you today?`;
-    } else {
-      heroGreeting.textContent = `How can I help you today?`;
-    }
+  // ---------------------------------------------------------------------------
+  // 24/7 Client-Side Heartbeat (Keeps Render Server Active While Browser is Open)
+  // ---------------------------------------------------------------------------
+  function startClientHeartbeat() {
+    if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
+    // Ping every 3 minutes so server never sleeps while user is on page
+    state.heartbeatTimer = setInterval(() => {
+      checkHealth();
+    }, 180000);
   }
 
-  function requestAutomaticPermissions() {
-    // 1. Automatic Geolocation Permission Request
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude.toFixed(2);
-          const lon = pos.coords.longitude.toFixed(2);
-          state.userLocation = `Lat ${lat}, Lon ${lon}`;
-          console.log('Location permission granted automatically:', state.userLocation);
-        },
-        (err) => {
-          console.warn('Geolocation permission not granted or error:', err);
-        }
-      );
-    }
-
-    // 2. Automatic Web Notification Permission Request
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().then(permission => {
-        console.log('Notification permission status:', permission);
-      }).catch(err => {
-        console.warn('Notification permission error:', err);
-      });
+  // ---------------------------------------------------------------------------
+  // Health & Config Calls
+  // ---------------------------------------------------------------------------
+  async function checkHealth() {
+    try {
+      const startMs = Date.now();
+      const resp = await fetch('/health');
+      const latencyMs = Date.now() - startMs;
+      if (resp.ok) {
+        if (DOM.backendStatusDot) DOM.backendStatusDot.className = 'status-dot online';
+        if (DOM.backendStatusText) DOM.backendStatusText.textContent = `Connected (${latencyMs}ms)`;
+      } else {
+        if (DOM.backendStatusDot) DOM.backendStatusDot.className = 'status-dot offline';
+        if (DOM.backendStatusText) DOM.backendStatusText.textContent = 'Degraded';
+      }
+    } catch (e) {
+      if (DOM.backendStatusDot) DOM.backendStatusDot.className = 'status-dot offline';
+      if (DOM.backendStatusText) DOM.backendStatusText.textContent = 'Reconnecting...';
     }
   }
 
@@ -167,23 +130,30 @@
       if (resp.ok) {
         const config = await resp.json();
         state.config = config;
-        
-        if (DOM.userDisplayName) DOM.userDisplayName.textContent = config.workspace_name || 'Nexus AI Workspace';
-        if (DOM.userDisplaySubtext) {
-          const provs = (config.active_providers || []).map(p => p.toUpperCase()).join(' → ');
-          DOM.userDisplaySubtext.textContent = provs ? `Active: ${provs}` : 'Multi-API Fallback Engine';
+        if (DOM.providerChainText && config.active_providers && config.active_providers.length > 0) {
+          DOM.providerChainText.textContent = config.active_providers.map(p => p.toUpperCase()).join(' → ');
         }
-
-        const chainBox = document.querySelector('.settings-chain-box');
-        if (chainBox && config.active_providers && config.active_providers.length > 0) {
-          chainBox.innerHTML = config.active_providers.map((p, idx) => `
-            <div class="chain-step ${idx === 0 ? 'active' : ''}">${idx + 1}. ${p.toUpperCase()}</div>
-            ${idx < config.active_providers.length - 1 ? '<div class="chain-arrow">&rarr;</div>' : ''}
-          `).join('');
+        if (DOM.modeTagDisplay) {
+          DOM.modeTagDisplay.textContent = config.is_live_ready ? 'Live Groq / Gemini' : 'Local Fallback Engine';
         }
       }
     } catch (e) {
-      console.warn('Failed to fetch system config:', e);
+      console.warn('System config fetch non-critical warning:', e);
+    }
+  }
+
+  async function fetchDocuments() {
+    try {
+      const resp = await fetch('/documents', {
+        headers: getAuthHeaders()
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        state.documents = data.documents || [];
+        renderSidebarDocuments();
+      }
+    } catch (e) {
+      console.warn('Documents fetch warning:', e);
     }
   }
 
@@ -227,7 +197,7 @@
     const session = state.sessions.find(s => s.id === sessionId);
     if (!session) return;
 
-    DOM.activeChatTitle.textContent = session.title;
+    if (DOM.activeChatTitle) DOM.activeChatTitle.textContent = session.title;
     renderSidebarChats();
     renderMessagesStream(session.messages);
   }
@@ -244,7 +214,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // API Requests
+  // API Requests & Execution Loop
   // ---------------------------------------------------------------------------
   function getAuthHeaders() {
     return {
@@ -253,81 +223,23 @@
     };
   }
 
-  async function checkHealth() {
-    try {
-      const resp = await fetch('/health');
-      if (resp.ok) {
-        DOM.backendStatusDot.className = 'status-dot online';
-        DOM.backendStatusText.textContent = 'Connected';
-      } else {
-        DOM.backendStatusDot.className = 'status-dot offline';
-        DOM.backendStatusText.textContent = 'Degraded';
-      }
-    } catch (e) {
-      DOM.backendStatusDot.className = 'status-dot offline';
-      DOM.backendStatusText.textContent = 'Offline';
-    }
-  }
-
-  async function fetchUserProfile() {
-    try {
-      const resp = await fetch('/auth/me', { headers: getAuthHeaders() });
-      if (resp.ok) {
-        const data = await resp.json();
-        const role = (data.roles && data.roles[0]) || 'reader';
-        const nameMap = {
-          'alice_admin': 'Alice (Admin)',
-          'bob_engineer': 'Bob (Operator)',
-          'charlie_intern': 'Charlie (Reader)'
-        };
-        state.userProfile = {
-          user_id: data.user_id,
-          name: nameMap[data.user_id] || data.user_id,
-          role: role
-        };
-        updateUserDisplay();
-      }
-    } catch (e) {
-      console.warn('Auth check failed:', e);
-    }
-  }
-
-  async function fetchDocuments() {
-    try {
-      const resp = await fetch('/documents', { headers: getAuthHeaders() });
-      if (resp.ok) {
-        const data = await resp.json();
-        state.documents = data.documents || [];
-        renderSidebarDocuments();
-      }
-    } catch (e) {
-      console.warn('Failed to fetch document list:', e);
-    }
-  }
-
   async function sendQueryToAgent(userQuery) {
     const session = state.sessions.find(s => s.id === state.activeSessionId);
     if (!session) return;
 
-    let payloadQuery = userQuery;
-    if (state.userLocation && userQuery.toLowerCase().includes('weather')) {
-      payloadQuery = `${userQuery} (User Location: ${state.userLocation})`;
-    }
-
-    // Prepare multi-turn conversation history
+    // Multi-turn context: take last 6 messages
     const history = session.messages.slice(-6).map(m => ({
       role: m.role,
       content: m.text
     }));
 
     const body = {
-      query: payloadQuery,
+      query: userQuery,
       conversation_history: history,
       search_mode: state.searchMode
     };
 
-    const url = `/query${state.isMock ? '?mock=true' : ''}`;
-    const response = await fetch(url, {
+    const response = await fetch('/query', {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(body)
@@ -342,43 +254,32 @@
         answer: `🛡️ **Security Guardrail Intercepted Query**\n\n${detail.reason || 'Query rejected due to safety policy violation.'}`,
         sources: [],
         structured_sources: { internal: [], web: [] },
-        validation: { is_grounded: false, confidence: 0, reasoning: detail.reason || 'Guardrail violation' }
+        validation: { is_grounded: false, confidence: 0, reasoning: detail.reason || 'Guardrail flagged' }
       };
     } else if (response.status === 429) {
       const errData = await response.json();
-      const msg = errData.message || 'Upstream TPM budget exhausted.';
       return {
         is_error: true,
         error_type: 'rate_limit',
-        answer: `⏱️ **Upstream API Rate Limit Reached (Groq Free Tier)**\n\n${msg}\n\n*Tip: You can switch to **Offline Mock Mode** using the toggle at the top right to continue testing instantly without waiting!*`,
+        answer: `⚠️ **Rate Limit Exceeded**\n\n${errData.message || 'Upstream provider capacity reached. Please wait a moment and retry.'}`,
         sources: [],
-        structured_sources: { internal: [], web: [] },
-        validation: { is_grounded: false, confidence: 0, reasoning: 'Rate limit exceeded' }
+        structured_sources: { internal: [], web: [] }
       };
-    } else if (!response.ok) {
+    }
+
+    if (!response.ok) {
       const errText = await response.text();
-      return {
-        is_error: true,
-        error_type: 'server_error',
-        answer: `⚠️ **Server Error (HTTP ${response.status})**\n\n${errText}`,
-        sources: [],
-        structured_sources: { internal: [], web: [] },
-        validation: { is_grounded: false, confidence: 0, reasoning: 'HTTP Error' }
-      };
+      throw new Error(`Server responded with ${response.status}: ${errText}`);
     }
 
     return await response.json();
   }
 
-  // ---------------------------------------------------------------------------
-  // Message Handling & UI Rendering
-  // ---------------------------------------------------------------------------
-  async function handleSendMessage(customPrompt = null) {
-    const promptText = (customPrompt || DOM.chatInput.value).trim();
+  async function handleSendMessage(customPrompt) {
+    const promptText = (customPrompt || (DOM.chatInput ? DOM.chatInput.value : '')).trim();
     if (!promptText) return;
 
-    // Clear input & update height
-    if (!customPrompt) {
+    if (!customPrompt && DOM.chatInput) {
       DOM.chatInput.value = '';
       DOM.chatInput.style.height = 'auto';
       updateSendButtonState();
@@ -387,10 +288,10 @@
     const session = state.sessions.find(s => s.id === state.activeSessionId);
     if (!session) return;
 
-    // Set title on first message
+    // Auto-title session from first query
     if (session.messages.length === 0) {
-      session.title = promptText.length > 30 ? promptText.substring(0, 30) + '...' : promptText;
-      DOM.activeChatTitle.textContent = session.title;
+      session.title = promptText.length > 28 ? promptText.substring(0, 28) + '...' : promptText;
+      if (DOM.activeChatTitle) DOM.activeChatTitle.textContent = session.title;
       renderSidebarChats();
     }
 
@@ -400,19 +301,19 @@
     saveSessionsToStorage();
     renderMessagesStream(session.messages);
 
-    // 2. Append Pending Assistant Message Shell
+    // 2. Append Pending Assistant Shell
     const pendingId = 'msg_' + Date.now();
     renderPendingAssistantMessage(pendingId);
 
     try {
-      // 3. Call Backend API
+      // 3. Query Backend
       const responseData = await sendQueryToAgent(promptText);
 
-      // Remove pending shell
+      // Remove pending animation
       const pendingEl = document.getElementById(pendingId);
       if (pendingEl) pendingEl.remove();
 
-      // 4. Update Assistant Message in session state
+      // 4. Append Assistant Message
       const assistantMsg = {
         role: 'assistant',
         text: responseData.answer,
@@ -428,26 +329,14 @@
       saveSessionsToStorage();
       renderMessagesStream(session.messages);
 
-      // Trigger Web Notification when response is ready
-      if ('Notification' in window && Notification.permission === 'granted') {
-        try {
-          const cleanText = responseData.answer ? responseData.answer.replace(/[*#`_]/g, '').trim() : 'Response is ready!';
-          new Notification('Nexus AI Response Ready', {
-            body: cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText
-          });
-        } catch (e) {
-          console.warn('Failed to trigger web notification:', e);
-        }
-      }
-
     } catch (err) {
-      console.error('Error executing query:', err);
+      console.error('Query execution error:', err);
       const pendingEl = document.getElementById(pendingId);
       if (pendingEl) pendingEl.remove();
 
       session.messages.push({
         role: 'assistant',
-        text: `⚠️ **Connection Error**\n\nCould not reach the Agentic RAG API server. Please check your network connection.`,
+        text: `⚠️ **Connection Error**\n\nCould not reach the RAG API server. The server may be warming up or reconnecting. Please retry in a few seconds.`,
         sources: [],
         structuredSources: { internal: [], web: [] },
         isError: true,
@@ -458,8 +347,70 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Rendering Methods
+  // ---------------------------------------------------------------------------
+  function renderSidebarChats() {
+    if (!DOM.chatsList) return;
+    DOM.chatsList.innerHTML = '';
+    state.sessions.forEach(session => {
+      const item = document.createElement('div');
+      item.className = `chat-item ${session.id === state.activeSessionId ? 'active' : ''}`;
+      item.onclick = () => switchSession(session.id);
+
+      item.innerHTML = `
+        <span class="chat-item-title">${escapeHtml(session.title)}</span>
+        <button class="chat-item-delete" title="Delete conversation">&times;</button>
+      `;
+
+      const delBtn = item.querySelector('.chat-item-delete');
+      if (delBtn) delBtn.onclick = (e) => deleteSession(session.id, e);
+      DOM.chatsList.appendChild(item);
+    });
+  }
+
+  function renderSidebarDocuments() {
+    if (DOM.docCounter) {
+      DOM.docCounter.textContent = `${state.documents.length} files`;
+    }
+    if (!DOM.docsCompactList) return;
+
+    if (!state.documents || state.documents.length === 0) {
+      DOM.docsCompactList.innerHTML = '<div class="doc-empty-state">No documents indexed. Click Upload to add.</div>';
+      return;
+    }
+
+    DOM.docsCompactList.innerHTML = '';
+    state.documents.forEach(doc => {
+      const item = document.createElement('div');
+      item.className = 'doc-compact-item';
+      const cleanExt = (doc.suffix || '').replace('.', '').toUpperCase();
+      const kbSize = doc.size_bytes ? `${(doc.size_bytes / 1024).toFixed(1)} KB` : '';
+
+      item.innerHTML = `
+        <div class="doc-item-main">
+          <span class="doc-ext-badge ext-${cleanExt.toLowerCase()}">${cleanExt}</span>
+          <span class="doc-compact-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</span>
+        </div>
+        <span class="doc-item-size">${kbSize}</span>
+      `;
+
+      // Clicking a document loads a quick prompt about it into the input
+      item.onclick = () => {
+        if (DOM.chatInput) {
+          DOM.chatInput.value = `Explain the key points and details in ${doc.filename}.`;
+          DOM.chatInput.focus();
+          updateSendButtonState();
+        }
+      };
+
+      DOM.docsCompactList.appendChild(item);
+    });
+  }
 
   function renderMessagesStream(messages) {
+    if (!DOM.messagesStream) return;
+
     if (!messages || messages.length === 0) {
       if (DOM.welcomeContainer) DOM.welcomeContainer.classList.remove('hidden');
       DOM.messagesStream.innerHTML = '';
@@ -469,30 +420,43 @@
     if (DOM.welcomeContainer) DOM.welcomeContainer.classList.add('hidden');
     DOM.messagesStream.innerHTML = '';
 
-    messages.forEach(msg => {
+    messages.forEach((msg, idx) => {
       if (msg.role === 'user') {
         const row = document.createElement('div');
         row.className = 'message-row user';
-        row.innerHTML = `<div class="user-bubble">${escapeHtml(msg.text)}</div>`;
+        row.innerHTML = `
+          <div class="user-bubble">
+            <div class="bubble-text">${escapeHtml(msg.text)}</div>
+          </div>
+        `;
         DOM.messagesStream.appendChild(row);
       } else {
         const row = document.createElement('div');
         row.className = 'message-row assistant';
 
-        const modeBadgeText = msg.searchMode === 'web' ? '🌐 Web Search' :
-                             msg.searchMode === 'hybrid' ? '⚡ Hybrid RAG + Web' :
-                             msg.searchMode === 'internal' ? '📚 Internal KB' : '✨ Auto Search';
+        const modeBadgeText = msg.searchMode === 'web' ? '🌐 Live Web Search' :
+                             msg.searchMode === 'hybrid' ? '⚡ Hybrid RAG' :
+                             msg.searchMode === 'internal' ? '📚 Knowledge Base Only' : '✨ Dynamic Agentic Search';
 
         const sourcesHtml = buildSourcesHtml(msg.structuredSources, msg.sources);
+        const uniqueCopyId = `copy_msg_${idx}`;
 
         row.innerHTML = `
           <div class="assistant-bubble-container">
             <div class="assistant-avatar">AI</div>
             <div class="assistant-content-wrap">
-              <div class="thought-pill">
-                <span>${modeBadgeText}</span>
+              <div class="assistant-meta-bar">
+                <span class="thought-pill">${modeBadgeText}</span>
+                <button class="btn-copy-msg" data-text="${escapeHtml(msg.text)}" onclick="copyMessageText(this)" title="Copy entire response">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>Copy</span>
+                </button>
               </div>
-              <div class="markdown-body">${formatMarkdown(msg.text)}</div>
+
+              <div class="assistant-markdown-body">${formatMarkdown(msg.text)}</div>
               ${sourcesHtml}
             </div>
           </div>
@@ -505,8 +469,7 @@
   }
 
   function renderPendingAssistantMessage(elementId) {
-    if (DOM.welcomeContainer) DOM.welcomeContainer.classList.add('hidden');
-
+    if (!DOM.messagesStream) return;
     const row = document.createElement('div');
     row.className = 'message-row assistant';
     row.id = elementId;
@@ -514,9 +477,9 @@
       <div class="assistant-bubble-container">
         <div class="assistant-avatar">AI</div>
         <div class="assistant-content-wrap">
-          <div class="thought-pill">
+          <div class="thought-pill running">
             <span class="pulse-spinner"></span>
-            <span>Synthesizing answer & retrieving sources...</span>
+            <span>Retrieving knowledge base evidence & synthesizing response...</span>
           </div>
         </div>
       </div>
@@ -539,19 +502,19 @@
     // Internal document pills
     internalList.forEach(src => {
       pills.push(`
-        <span class="source-badge internal" title="Internal document chunk">
+        <span class="source-badge internal" title="Internal knowledge base chunk">
           📄 ${escapeHtml(src.source)}
         </span>
       `);
     });
 
-    // Web source pills - deduplicated by domain
+    // Web source pills
     webList.forEach(w => {
       const domain = w.domain || 'web';
       if (!seenDomains.has(domain)) {
         seenDomains.add(domain);
         pills.push(`
-          <a href="${escapeHtml(w.url)}" target="_blank" rel="noopener noreferrer" class="source-badge web" title="${escapeHtml(w.title)}">
+          <a href="${escapeHtml(w.url)}" target="_blank" rel="noopener noreferrer" class="source-badge web" title="${escapeHtml(w.title || domain)}">
             🌐 ${escapeHtml(domain)}
           </a>
         `);
@@ -565,209 +528,20 @@
       });
     }
 
-    return `<div class="sources-tray">${pills.join('')}</div>`;
-  }
-
-  function renderSidebarChats() {
-    DOM.chatsList.innerHTML = '';
-    state.sessions.forEach(session => {
-      const item = document.createElement('div');
-      item.className = `chat-item ${session.id === state.activeSessionId ? 'active' : ''}`;
-      item.onclick = () => switchSession(session.id);
-
-      item.innerHTML = `
-        <span class="chat-item-title">${escapeHtml(session.title)}</span>
-        <button class="chat-item-delete" title="Delete chat">&times;</button>
-      `;
-
-      item.querySelector('.chat-item-delete').onclick = (e) => deleteSession(session.id, e);
-      DOM.chatsList.appendChild(item);
-    });
-  }
-
-  function renderSidebarDocuments() {
-    if (!state.documents || state.documents.length === 0) {
-      DOM.docsCompactList.innerHTML = '<div class="doc-compact-item">No documents ingested</div>';
-      return;
-    }
-
-    DOM.docsCompactList.innerHTML = '';
-    state.documents.forEach(doc => {
-      const item = document.createElement('div');
-      item.className = 'doc-compact-item';
-      item.innerHTML = `
-        <span class="doc-compact-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</span>
-        <span class="doc-compact-badge">${doc.suffix.replace('.', '')}</span>
-      `;
-      DOM.docsCompactList.appendChild(item);
-    });
-  }
-
-  function updateUserDisplay() {
-    if (DOM.userAvatarInitials) DOM.userAvatarInitials.textContent = (state.userProfile.name || 'W').charAt(0).toUpperCase();
-    if (DOM.userDisplayName) DOM.userDisplayName.textContent = state.userProfile.name || 'User Workspace';
-    if (DOM.userRoleTag) {
-      DOM.userRoleTag.textContent = state.userProfile.role;
-      DOM.userRoleTag.className = `user-role-badge role-${state.userProfile.role}`;
-    }
+    return `
+      <div class="sources-tray">
+        <span class="sources-label">Citations & Sources:</span>
+        <div class="sources-list">${pills.join('')}</div>
+      </div>
+    `;
   }
 
   // ---------------------------------------------------------------------------
-  // Event Listeners & Interaction Handlers
-  // ---------------------------------------------------------------------------
-  function setupEventListeners() {
-    // Sidebar toggle
-    if (DOM.toggleSidebarBtn) {
-      DOM.toggleSidebarBtn.addEventListener('click', () => {
-        DOM.sidebar.classList.toggle('collapsed');
-      });
-    }
-
-    // New Chat
-    if (DOM.newChatBtn) DOM.newChatBtn.addEventListener('click', createNewSession);
-
-    // Mode Selector Pills
-    document.querySelectorAll('.mode-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        state.searchMode = btn.dataset.mode;
-        updateWebTogglePillState();
-      });
-    });
-
-    // Web Search Toggle Pill in Composer
-    if (DOM.webTogglePill) {
-      DOM.webTogglePill.addEventListener('click', () => {
-        DOM.webTogglePill.classList.toggle('active');
-        const isActive = DOM.webTogglePill.classList.contains('active');
-        state.searchMode = isActive ? 'auto' : 'internal';
-        
-        // Update sidebar mode pill
-        document.querySelectorAll('.mode-pill').forEach(b => {
-          b.classList.toggle('active', b.dataset.mode === state.searchMode);
-        });
-      });
-    }
-
-    // Location Permission Toggle Pill
-    if (DOM.locationPermBtn) {
-      DOM.locationPermBtn.addEventListener('click', () => {
-        if (!navigator.geolocation) {
-          alert('Geolocation is not supported by your browser. Please type your location in your query.');
-          return;
-        }
-        DOM.locationPermText.textContent = 'Locating...';
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const lat = pos.coords.latitude.toFixed(2);
-            const lon = pos.coords.longitude.toFixed(2);
-            state.userLocation = `Lat ${lat}, Lon ${lon}`;
-            DOM.locationPermBtn.classList.add('active');
-            DOM.locationPermText.textContent = '📍 Enabled';
-          },
-          (err) => {
-            console.warn('Geolocation error:', err);
-            DOM.locationPermBtn.classList.remove('active');
-            DOM.locationPermText.textContent = 'Location';
-            alert('Location access was not granted. Please specify your city in your prompt (e.g. "What is the weather in Hyderabad?").');
-          }
-        );
-      });
-    }
-
-    // Mock Mode Switch (Optional)
-    if (DOM.mockToggle) {
-      DOM.mockToggle.addEventListener('change', (e) => {
-        state.isMock = e.target.checked;
-        if (DOM.modeTagDisplay) DOM.modeTagDisplay.textContent = state.isMock ? 'Offline Mock' : 'Live Groq';
-      });
-    }
-
-
-    // Reindex Trigger
-    if (DOM.reindexBtn) DOM.reindexBtn.addEventListener('click', triggerReindex);
-
-    // Textarea input resize & key events
-    if (DOM.chatInput) {
-      DOM.chatInput.addEventListener('input', () => {
-        DOM.chatInput.style.height = 'auto';
-        DOM.chatInput.style.height = Math.min(DOM.chatInput.scrollHeight, 180) + 'px';
-        updateSendButtonState();
-      });
-
-      DOM.chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          handleSendMessage();
-        }
-      });
-    }
-
-    if (DOM.sendBtn) DOM.sendBtn.addEventListener('click', () => handleSendMessage());
-
-    // Starter Suggestion Cards
-    document.querySelectorAll('.suggestion-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const query = card.dataset.query;
-        const mode = card.dataset.mode || 'auto';
-        if (mode) {
-          state.searchMode = mode;
-          document.querySelectorAll('.mode-pill').forEach(b => {
-            b.classList.toggle('active', b.dataset.mode === mode);
-          });
-        }
-        handleSendMessage(query);
-      });
-    });
-
-    // Keyboard Shortcuts (Ctrl+K / Cmd+K)
-    window.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        createNewSession();
-      }
-    });
-
-    // Settings Modal
-    if (DOM.openSettingsHdrBtn) DOM.openSettingsHdrBtn.addEventListener('click', () => openSettingsModal());
-    if (DOM.sidebarSettingsBtn) DOM.sidebarSettingsBtn.addEventListener('click', () => openSettingsModal());
-    if (DOM.closeSettingsModalBtn) DOM.closeSettingsModalBtn.addEventListener('click', () => closeSettingsModal());
-    if (DOM.cancelSettingsBtn) DOM.cancelSettingsBtn.addEventListener('click', () => closeSettingsModal());
-    if (DOM.saveSettingsBtn) DOM.saveSettingsBtn.addEventListener('click', () => closeSettingsModal());
-
-    // Modals
-    if (DOM.sidebarUploadBtn) DOM.sidebarUploadBtn.addEventListener('click', () => openUploadModal());
-    if (DOM.composerAttachBtn) DOM.composerAttachBtn.addEventListener('click', () => openUploadModal());
-    if (DOM.closeUploadModalBtn) DOM.closeUploadModalBtn.addEventListener('click', () => closeUploadModal());
-    if (DOM.cancelUploadBtn) DOM.cancelUploadBtn.addEventListener('click', () => closeUploadModal());
-
-    if (DOM.userProfileTrigger) DOM.userProfileTrigger.addEventListener('click', () => openSettingsModal());
-    if (DOM.closeAuthModalBtn) DOM.closeAuthModalBtn.addEventListener('click', () => closeAuthModal());
-    if (DOM.cancelAuthBtn) DOM.cancelAuthBtn.addEventListener('click', () => closeAuthModal());
-
-    setupUploadDropzone();
-    setupAuthPresets();
-  }
-
-  function updateSendButtonState() {
-    DOM.sendBtn.disabled = DOM.chatInput.value.trim().length === 0;
-  }
-
-  function updateWebTogglePillState() {
-    DOM.webTogglePill.classList.toggle('active', state.searchMode !== 'internal');
-  }
-
-  function scrollToBottom() {
-    DOM.chatViewport.scrollTop = DOM.chatViewport.scrollHeight;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Reindex & Upload Logic
+  // Reindex & Upload Logic (Real Backend Handlers)
   // ---------------------------------------------------------------------------
   async function triggerReindex() {
-    DOM.reindexBtnText.textContent = 'Reindexing...';
-    DOM.reindexBtn.disabled = true;
+    if (DOM.reindexBtnText) DOM.reindexBtnText.textContent = 'Reindexing...';
+    if (DOM.reindexBtn) DOM.reindexBtn.disabled = true;
 
     try {
       const resp = await fetch('/reindex', {
@@ -777,21 +551,21 @@
 
       if (resp.ok) {
         const data = await resp.json();
-        DOM.reindexBtnText.textContent = `Indexed ${data.chunks_indexed} chunks`;
+        if (DOM.reindexBtnText) DOM.reindexBtnText.textContent = `Indexed ${data.chunks_indexed} chunks!`;
         fetchDocuments();
       } else {
         const err = await resp.json();
         alert(`Reindex failed: ${err.detail || 'Permission denied'}`);
-        DOM.reindexBtnText.textContent = 'Reindex';
+        if (DOM.reindexBtnText) DOM.reindexBtnText.textContent = 'Reindex KB';
       }
     } catch (e) {
       console.error(e);
-      DOM.reindexBtnText.textContent = 'Reindex';
+      if (DOM.reindexBtnText) DOM.reindexBtnText.textContent = 'Reindex KB';
     } finally {
       setTimeout(() => {
-        DOM.reindexBtnText.textContent = 'Reindex';
-        DOM.reindexBtn.disabled = false;
-      }, 3000);
+        if (DOM.reindexBtnText) DOM.reindexBtnText.textContent = 'Reindex KB';
+        if (DOM.reindexBtn) DOM.reindexBtn.disabled = false;
+      }, 3500);
     }
   }
 
@@ -842,17 +616,6 @@
   async function handleFileUpload() {
     if (!state.pendingUploadFile) return;
 
-    // Read user selected search mode for this document
-    const selectedModeRadio = document.querySelector('input[name="upload-mode"]:checked');
-    if (selectedModeRadio) {
-      state.searchMode = selectedModeRadio.value;
-      // Synchronize UI search mode pills
-      document.querySelectorAll('.mode-pill').forEach(b => {
-        b.classList.toggle('active', b.dataset.mode === state.searchMode);
-      });
-      updateWebTogglePillState();
-    }
-
     if (DOM.uploadProgressWrap) DOM.uploadProgressWrap.classList.remove('hidden');
     if (DOM.submitUploadBtn) DOM.submitUploadBtn.disabled = true;
 
@@ -875,15 +638,14 @@
         const data = await resp.json();
         closeUploadModal();
         fetchDocuments();
-        
-        // Show clean assistant notification in chat
+
         const session = state.sessions.find(s => s.id === state.activeSessionId);
         if (session) {
           session.messages.push({
             role: 'assistant',
-            text: `📄 **Document Attached & Ingested**: \`${data.filename}\` (${data.chunks_indexed} chunks indexed)\n\nSearch mode set to **${state.searchMode.toUpperCase()}**. You can now ask questions about this document!`,
-            sources: [],
-            structuredSources: { internal: [], web: [] },
+            text: `📄 **Document Ingested Successfully**\n\n- File: \`${data.filename}\`\n- Size: \`${(data.size_bytes / 1024).toFixed(1)} KB\`\n- Chunks Indexed: \`${data.chunks_indexed}\`\n\nThe vector knowledge base has been updated. You can now ask any question regarding this document!`,
+            sources: [data.filename],
+            structuredSources: { internal: [{ source: data.filename }], web: [] },
             timestamp: new Date().toISOString()
           });
           saveSessionsToStorage();
@@ -902,86 +664,135 @@
     }
   }
 
-
   function openUploadModal() {
-    if (DOM.uploadModal) DOM.uploadModal.classList.remove('hidden');
+    if (DOM.uploadModal) {
+      DOM.uploadModal.classList.remove('hidden');
+      state.pendingUploadFile = null;
+      if (DOM.dropzoneFilename) DOM.dropzoneFilename.textContent = 'No file selected';
+      if (DOM.submitUploadBtn) DOM.submitUploadBtn.disabled = true;
+    }
   }
+
   function closeUploadModal() {
     if (DOM.uploadModal) DOM.uploadModal.classList.add('hidden');
-    state.pendingUploadFile = null;
-    if (DOM.dropzoneFilename) DOM.dropzoneFilename.textContent = 'No file selected';
-    if (DOM.submitUploadBtn) DOM.submitUploadBtn.disabled = true;
   }
 
   // ---------------------------------------------------------------------------
-  // Auth Modal Logic
+  // Event Listeners & Interaction Handlers
   // ---------------------------------------------------------------------------
-  function setupAuthPresets() {
-    if (DOM.authPresetItems) {
-      DOM.authPresetItems.forEach(item => {
-        item.addEventListener('click', () => {
-          DOM.authPresetItems.forEach(i => i.classList.remove('active'));
-          item.classList.add('active');
-          state.authToken = item.dataset.key;
-          if (DOM.customTokenInput) DOM.customTokenInput.value = '';
+  function setupEventListeners() {
+    // Sidebar toggle
+    if (DOM.toggleSidebarBtn && DOM.sidebar) {
+      DOM.toggleSidebarBtn.addEventListener('click', () => {
+        DOM.sidebar.classList.toggle('collapsed');
+      });
+    }
+
+    // New Chat
+    if (DOM.newChatBtn) DOM.newChatBtn.addEventListener('click', createNewSession);
+
+    // Search Mode Selector Buttons (Auto, Hybrid, Internal Only, Web Search)
+    document.querySelectorAll('.mode-pill').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.searchMode = btn.dataset.mode || 'auto';
+        updateWebTogglePillState();
+      });
+    });
+
+    // Web Search Toggle Pill in Composer
+    if (DOM.webTogglePill) {
+      DOM.webTogglePill.addEventListener('click', () => {
+        DOM.webTogglePill.classList.toggle('active');
+        const isActive = DOM.webTogglePill.classList.contains('active');
+        state.searchMode = isActive ? 'auto' : 'internal';
+
+        document.querySelectorAll('.mode-pill').forEach(b => {
+          b.classList.toggle('active', b.dataset.mode === state.searchMode);
         });
       });
     }
 
-    if (DOM.saveAuthBtn) {
-      DOM.saveAuthBtn.addEventListener('click', () => {
-        const customVal = DOM.customTokenInput ? DOM.customTokenInput.value.trim() : '';
-        if (customVal) {
-          state.authToken = customVal;
-        }
-        localStorage.setItem(AUTH_STORAGE_KEY, state.authToken);
-        fetchUserProfile();
-        closeAuthModal();
+    // Reindex Trigger
+    if (DOM.reindexBtn) DOM.reindexBtn.addEventListener('click', triggerReindex);
+
+    // Textarea input resize & key events
+    if (DOM.chatInput) {
+      DOM.chatInput.addEventListener('input', () => {
+        DOM.chatInput.style.height = 'auto';
+        DOM.chatInput.style.height = Math.min(DOM.chatInput.scrollHeight, 180) + 'px';
+        updateSendButtonState();
       });
+
+      DOM.chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          handleSendMessage();
+        }
+      });
+    }
+
+    if (DOM.sendBtn) DOM.sendBtn.addEventListener('click', () => handleSendMessage());
+
+    // Suggestion Chips (Grounded in real documents)
+    document.querySelectorAll('.suggestion-chip').forEach(card => {
+      card.addEventListener('click', () => {
+        const query = card.dataset.query;
+        const mode = card.dataset.mode || 'auto';
+        if (mode) {
+          state.searchMode = mode;
+          document.querySelectorAll('.mode-pill').forEach(b => {
+            b.classList.toggle('active', b.dataset.mode === mode);
+          });
+          updateWebTogglePillState();
+        }
+        handleSendMessage(query);
+      });
+    });
+
+    // Keyboard Shortcuts (Ctrl+K)
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        createNewSession();
+      }
+    });
+
+    // Upload Modal Triggers
+    if (DOM.sidebarUploadBtn) DOM.sidebarUploadBtn.addEventListener('click', openUploadModal);
+    if (DOM.composerAttachBtn) DOM.composerAttachBtn.addEventListener('click', openUploadModal);
+    if (DOM.closeUploadModalBtn) DOM.closeUploadModalBtn.addEventListener('click', closeUploadModal);
+    if (DOM.cancelUploadBtn) DOM.cancelUploadBtn.addEventListener('click', closeUploadModal);
+
+    // Guardrail Alert Close
+    if (DOM.closeGuardrailBtn) {
+      DOM.closeGuardrailBtn.addEventListener('click', () => {
+        if (DOM.guardrailBanner) DOM.guardrailBanner.classList.add('hidden');
+      });
+    }
+
+    setupUploadDropzone();
+  }
+
+  function updateSendButtonState() {
+    if (!DOM.sendBtn || !DOM.chatInput) return;
+    DOM.sendBtn.disabled = DOM.chatInput.value.trim().length === 0;
+  }
+
+  function updateWebTogglePillState() {
+    if (!DOM.webTogglePill) return;
+    DOM.webTogglePill.classList.toggle('active', state.searchMode !== 'internal');
+  }
+
+  function scrollToBottom() {
+    if (DOM.chatViewport) {
+      DOM.chatViewport.scrollTop = DOM.chatViewport.scrollHeight;
     }
   }
 
-  function openAuthModal() { if (DOM.authModal) DOM.authModal.classList.remove('hidden'); }
-  function closeAuthModal() { if (DOM.authModal) DOM.authModal.classList.add('hidden'); }
-
-  function openSettingsModal() { if (DOM.settingsModal) DOM.settingsModal.classList.remove('hidden'); }
-  function closeSettingsModal() { if (DOM.settingsModal) DOM.settingsModal.classList.add('hidden'); }
-
   // ---------------------------------------------------------------------------
-  // Banner Helpers
-  // ---------------------------------------------------------------------------
-  function showGuardrailAlert(type, reason) {
-    DOM.guardrailReason.textContent = `${type}: ${reason}`;
-    DOM.guardrailBanner.classList.remove('hidden');
-  }
-
-  function startRateLimitCountdown(seconds, msg) {
-    DOM.rateLimitMessage.textContent = msg;
-    DOM.rateLimitBanner.classList.remove('hidden');
-
-    let remaining = seconds;
-    DOM.countdownTimer.textContent = `${remaining}s`;
-
-    if (state.countdownTimerId) clearInterval(state.countdownTimerId);
-
-    state.countdownTimerId = setInterval(() => {
-      remaining--;
-      if (remaining <= 0) {
-        clearInterval(state.countdownTimerId);
-        DOM.rateLimitBanner.classList.add('hidden');
-      } else {
-        DOM.countdownTimer.textContent = `${remaining}s`;
-      }
-    }, 1000);
-  }
-
-  function hideBanners() {
-    DOM.guardrailBanner.classList.add('hidden');
-    DOM.rateLimitBanner.classList.add('hidden');
-  }
-
-  // ---------------------------------------------------------------------------
-  // Formatting Utilities
+  // Markdown & Utility Formatting
   // ---------------------------------------------------------------------------
   function escapeHtml(str) {
     if (!str) return '';
@@ -994,20 +805,19 @@
 
   function formatMarkdown(text) {
     if (!text) return '';
-    // Strip trailing raw markdown URL badges before rendering
     text = text.replace(/(?:\[🌐\s*[^\]]+\]\([^\)]+\)\s*){2,}/g, '').trim();
     let html = escapeHtml(text);
 
-    // Fenced Code Blocks ```lang \n code ```
+    // Code Blocks
     html = html.replace(/```([a-zA-Z0-9_\-\+]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
       const language = (lang || 'code').toUpperCase();
       const rawCode = code.trim();
       return `
-        <div class="code-block-wrapper">
+        <div class="code-block-card">
           <div class="code-block-header">
             <span class="code-lang-tag">${language}</span>
             <button class="copy-code-btn" data-code="${escapeHtml(rawCode)}" onclick="copyCodeToClipboard(this)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
               </svg>
@@ -1019,22 +829,29 @@
       `;
     });
 
-    // Inline code `code`
+    // Inline Code
     html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
 
-    // Bold **text**
+    // Bold
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
-    // Markdown Links [title](url)
+    // Markdown Links
     html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
-    // Bullet lists
+    // Headers
+    html = html.replace(/^### (.*$)/gim, '<h4 class="md-h4">$1</h4>');
+    html = html.replace(/^## (.*$)/gim, '<h3 class="md-h3">$1</h3>');
+    html = html.replace(/^# (.*$)/gim, '<h2 class="md-h2">$1</h2>');
+
+    // Bullet Lists
     html = html.replace(/^\s*[\-\*]\s+(.*)$/gm, '<li>$1</li>');
-    html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    html = html.replace(/(<li>.*<\/li>)/s, '<ul class="md-list">$1</ul>');
 
     // Paragraph splits
     return html.split('\n\n').map(p => {
-      if (p.startsWith('<div class="code-block-wrapper">') || p.startsWith('<ul>') || p.startsWith('<li>')) return p;
+      if (p.startsWith('<div class="code-block-card">') || p.startsWith('<ul') || p.startsWith('<h2') || p.startsWith('<h3') || p.startsWith('<h4')) {
+        return p;
+      }
       return `<p>${p.replace(/\n/g, '<br>')}</p>`;
     }).join('');
   }
@@ -1053,11 +870,25 @@
           btn.classList.remove('copied');
         }, 2000);
       }
-    }).catch(err => {
-      console.error('Failed to copy code:', err);
-    });
+    }).catch(err => console.error('Copy error:', err));
   };
 
-  // Initialize App on DOM Load
+  window.copyMessageText = function(btn) {
+    const text = btn.getAttribute('data-text');
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      const span = btn.querySelector('span');
+      if (span) {
+        const orig = span.textContent;
+        span.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          span.textContent = orig;
+          btn.classList.remove('copied');
+        }, 2000);
+      }
+    }).catch(err => console.error('Copy error:', err));
+  };
+
   document.addEventListener('DOMContentLoaded', init);
 })();
