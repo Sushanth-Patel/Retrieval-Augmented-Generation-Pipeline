@@ -33,6 +33,7 @@ import re
 import argparse
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import TypedDict, List, Dict, Any, Optional
 
@@ -82,8 +83,10 @@ class LangGraphAgent:
         self.memory = MemoryStore()
         self.llm = LLMClient(force_mock=force_mock, rate_limiter=rate_limiter)
         self.web_search = WebSearchEngine(force_mock=force_mock)
+        self._ingest_thread: Optional[threading.Thread] = None
         if self.vector_store.count() == 0:
-            self._ingest_defaults()
+            self._ingest_thread = threading.Thread(target=self._ingest_defaults, daemon=True, name="bg_initial_ingest")
+            self._ingest_thread.start()
         self.graph = self._build_graph()
 
     def _ingest_defaults(self, docs_dir: str = "data/sample_docs"):
@@ -178,6 +181,9 @@ class LangGraphAgent:
 
         # 1. Internal Documentation Search (unless mode is strictly web)
         if mode != "web":
+            if getattr(self, "_ingest_thread", None) and self._ingest_thread.is_alive():
+                self._ingest_thread.join(timeout=15.0)
+
             orig_chunks = self.vector_store.query(query, top_k=4)
             for c in orig_chunks:
                 if c.get("chunk_id") not in seen_ids:
