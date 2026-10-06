@@ -16,6 +16,7 @@ import time
 import urllib.request
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 # Ensure writable XDG_CACHE_HOME before importing or instantiating ChromaDB / ML models
 if "XDG_CACHE_HOME" not in os.environ:
@@ -55,10 +56,40 @@ from phase3_langgraph_agent import LangGraphAgent
 logger = logging.getLogger("rag_api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
+# -----------------------------------------------------------------------------
+# 24/7 Keep-Alive Background Worker (Prevents Cloud Host Idle Timeout)
+# -----------------------------------------------------------------------------
+def _keep_alive_loop():
+    """Background daemon pinging health check every 10 minutes to prevent sleep."""
+    render_url = os.getenv("RENDER_EXTERNAL_URL") or "https://retrieval-augmented-generation-pipeline.onrender.com"
+    health_url = f"{render_url.rstrip('/')}/health"
+    logger.info("Keep-alive background daemon active. Target: %s", health_url)
+    while True:
+        try:
+            time.sleep(600)  # 10 minutes
+            req = urllib.request.Request(
+                health_url,
+                headers={"User-Agent": "RAG-Pipeline-KeepAlive/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                if resp.status == 200:
+                    logger.debug("Keep-alive ping verified 200 OK")
+        except Exception as exc:
+            logger.debug("Keep-alive ping attempt: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    t = threading.Thread(target=_keep_alive_loop, daemon=True, name="keep_alive_daemon")
+    t.start()
+    yield
+
+
 app = FastAPI(
     title="Agentic RAG Pipeline API",
     version="1.0.0",
-    description="Production-hardened Agentic RAG API with RBAC, rate-limiting, and security guardrails."
+    description="Production-hardened Agentic RAG API with RBAC, rate-limiting, and security guardrails.",
+    lifespan=lifespan
 )
 
 # Shared Service Singletons
@@ -94,34 +125,6 @@ def get_mock_guardrail() -> InputGuardrail:
         mock_a = get_mock_agent()
         _lazy_mock_guardrail = InputGuardrail(enable_semantic_check=True, llm_client=mock_a.llm)
     return _lazy_mock_guardrail
-
-
-# -----------------------------------------------------------------------------
-# 24/7 Keep-Alive Background Worker (Prevents Cloud Host Idle Timeout)
-# -----------------------------------------------------------------------------
-def _keep_alive_loop():
-    """Background daemon pinging health check every 10 minutes to prevent sleep."""
-    render_url = os.getenv("RENDER_EXTERNAL_URL") or "https://retrieval-augmented-generation-pipeline.onrender.com"
-    health_url = f"{render_url.rstrip('/')}/health"
-    logger.info("Keep-alive background daemon active. Target: %s", health_url)
-    while True:
-        try:
-            time.sleep(600)  # 10 minutes
-            req = urllib.request.Request(
-                health_url,
-                headers={"User-Agent": "RAG-Pipeline-KeepAlive/1.0"}
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                if resp.status == 200:
-                    logger.debug("Keep-alive ping verified 200 OK")
-        except Exception as exc:
-            logger.debug("Keep-alive ping attempt: %s", exc)
-
-
-@app.on_event("startup")
-def on_app_startup():
-    t = threading.Thread(target=_keep_alive_loop, daemon=True, name="keep_alive_daemon")
-    t.start()
 
 
 # -----------------------------------------------------------------------------

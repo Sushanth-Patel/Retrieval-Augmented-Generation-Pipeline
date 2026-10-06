@@ -29,6 +29,20 @@ from core.bm25 import BM25Index, reciprocal_rank_fusion
 
 class FastLightweightEmbeddingFunction(EmbeddingFunction):
     """Zero-memory 384-dim normalized hashing embedding function for restricted RAM containers (512MB free tier)."""
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def name() -> str:
+        return "fast_lightweight"
+
+    def get_config(self) -> dict:
+        return {}
+
+    @staticmethod
+    def build_from_config(config: dict) -> "FastLightweightEmbeddingFunction":
+        return FastLightweightEmbeddingFunction()
+
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
         for text in input:
