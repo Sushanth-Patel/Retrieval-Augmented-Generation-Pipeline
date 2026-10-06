@@ -6,7 +6,7 @@ services:
     dockerfilePath: ./Dockerfile
     envVars:
       - key: FORCE_MOCK
-        value: "true"
+        value: "false"
       - key: USE_LIGHTWEIGHT_EMBEDDINGS
         value: "true"
       - key: XDG_CACHE_HOME
