@@ -260,7 +260,7 @@ class ReindexResponse(BaseModel):
 # API Endpoints
 # -----------------------------------------------------------------------------
 
-@app.get("/health", tags=["Monitoring"])
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["Monitoring"])
 def health_check():
     """Unauthenticated health probe endpoint for container and uptime monitoring."""
     return {
