@@ -2,23 +2,29 @@ name: Render Keep-Alive 24/7 Pinger
 
 on:
   schedule:
-    # Runs every 10 minutes (Render spins down after 15 mins of inactivity)
-    - cron: '*/10 * * * *'
+    # Runs every 12 minutes (safely under Render's 15-minute inactivity limit, avoiding queue congestion)
+    - cron: '*/12 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: true
 
 jobs:
   keep-alive:
     name: Ping Render Health Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Send HTTP Ping to Render Live Service
+      - name: Ping Render Service
         run: |
-          echo "Pinging RAG Pipeline on Render to prevent sleep..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://retrieval-augmented-generation-pipeline.onrender.com/health")
-          echo "Render Health Endpoint Response: $HTTP_STATUS"
+          echo "Pinging RAG Pipeline on Render..."
+          URL="https://retrieval-augmented-generation-pipeline.onrender.com/health"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --retry 2 --retry-delay 3 --max-time 25 "$URL" || echo "000")
+          echo "HTTP Response Code: $HTTP_STATUS"
           if [ "$HTTP_STATUS" -eq 200 ]; then
-            echo "SUCCESS: Server is awake and active."
+            echo "SUCCESS: Render instance is active and healthy."
           else
-            echo "WARNING: Server responded with HTTP status $HTTP_STATUS. Attempting root path ping..."
-            curl -s -o /dev/null --max-time 45 "https://retrieval-augmented-generation-pipeline.onrender.com/"
+            echo "Ping status: $HTTP_STATUS. Attempting root path warmup..."
+            curl -s -o /dev/null --retry 1 --max-time 35 "https://retrieval-augmented-generation-pipeline.onrender.com/" || true
           fi
